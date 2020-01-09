@@ -1,5 +1,5 @@
-%global specversion 12
-%global upstream_version 0.4.4
+%global specversion 14
+%global upstream_version 0.6.0
 
 %define _default_patch_fuzz 2
 
@@ -11,7 +11,7 @@
 %bcond_without qmf
 
 Name:		matahari
-Version:	0.4.4
+Version:	0.6.0
 Release:	%{mh_release}
 Summary:	QMF Agents for Linux guests
 
@@ -19,24 +19,13 @@ Group:		Applications/System
 License:	GPLv2
 URL:		http://matahariproject.org
 
-Source0:	https://github.com/matahari/matahari/downloads/matahari-0.4.4.tar.gz
-Patch1:		674578-remove-kstart.diff
-Patch2:		bz737088-1-add-man-pages.diff
-Patch3:		bz737137-1-fix-sysconfig-issues.diff
-Patch4:		bz737618-1-kill-old-processes-on-upgrade.diff
-Patch5:		bz739666-1-fix-NULL-UUID.diff
-Patch6:		bz737137-2-fix-sysconfig-issues.diff
-Patch7:		bz740038-1-fix-sysconfig-no-response.diff
-Patch8:		bz735426-1-check-malloc-return-for-coverity.diff
-Patch9:		bz740090-1-sysconfig-validate-key-names.diff
-Patch10:	bz740090-2-add-mh_string_copy.diff
-Patch11:	bz740091-1-store-sysconfig-keys-in-subdir.diff
-Patch12:	bz741965-1-check-sysconfig-keys-sooner.diff
-Patch13:	bz735426-2-fix-warning.diff
-Patch14:	bz737088-2-dont-use-help2man.diff
-Patch15:        bz746288-1-cpu-features.diff
-Patch16:        bz751790-1-disable-by-default.diff
-Patch17:        remove-qpid-linking.diff
+Source0:	https://github.com/matahari/matahari/downloads/matahari-0.6.0.tar.gz
+Patch1:         cmake-2.6.diff
+Patch2:		qpid-broker-only-load-ssl.diff
+Patch3:		no-autogenerate-man-pages.diff
+Patch4:		remove-unused-includes.diff
+Patch5:		remove-qpidclient.diff
+Patch6:		disable-by-default.diff
 
 BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
@@ -47,10 +36,13 @@ Requires:	dbus
 Requires:	qmf > 0.7
 Requires:	pcre
 Requires:	%{name}-broker
+Requires:	%{name}-core
 Requires:	%{name}-host
 Requires:	%{name}-network
+Requires:	%{name}-rpc
 Requires:	%{name}-service
 Requires:	%{name}-sysconfig
+Requires:	%{name}-consoles
 
 BuildRequires:	cmake
 BuildRequires:	libuuid-devel
@@ -59,6 +51,10 @@ BuildRequires:	pcre-devel
 BuildRequires:	glib2-devel
 BuildRequires:  sigar-devel > 1.6.5-0.2
 BuildRequires:	libcurl-devel
+BuildRequires:	nss-devel
+BuildRequires:	help2man
+BuildRequires:	augeas-devel
+BuildRequires:	python2-devel
 
 %if %{with qmf}
 BuildRequires:	qpid-cpp-client-devel > 0.7
@@ -77,20 +73,30 @@ various pieces of functionality, using the AMQP protocol
 The Advanced Message Queuing Protocol (AMQP) is an open standard application
 layer protocol providing reliable transport of messages
 
-QMF provides a modeling framework layer on top of qpid (which implements
+QMF provides a modeling framework layer on top of Qpid (which implements
 AMQP).  This interface allows you to manage a host and its various components
 as a set of objects with properties and methods
 
+%package core
+License:	GPLv2+
+Summary:	Core files for Matahari
+Group:		Applications/System
+Requires(pre):	shadow-utils
+
+%description core
+Core files for Matahari
 
 %if %{with qmf}
 %package broker
 License:	GPLv2+
 Summary:	Optional AMQP Broker for Matahari
 Group:		Applications/System
-Requires:	%{name}-agent-lib = %{version}-%{release}
+Requires:	%{name}-core = %{version}-%{release}
+Requires:	%{name}-lib = %{version}-%{release}
 Requires:	qpid-cpp-server > 0.7
 Requires:	qpid-cpp-server-ssl > 0.7
 Requires:	qmf > 0.7
+Requires:       qpid-tools
 Requires(post):     chkconfig
 Requires(preun):    chkconfig
 Requires(preun):    initscripts
@@ -99,10 +105,37 @@ Requires(preun):    initscripts
 Optional AMQP Broker for Matahari
 %endif
 
+%package vios-proxy-host
+License:	ASL 2.0
+Summary:	Network proxy using virtioserial for QEMU host
+Group:		Applications/System
+Requires:       vios-proxy-host
+Requires:	%{name}-broker = %{version}-%{release}
+Requires(post):     chkconfig
+Requires(preun):    chkconfig
+Requires(preun):    initscripts
+
+%description vios-proxy-host
+%{name} specific host initialization scripts
+
+%package vios-proxy-guest
+License:	ASL 2.0
+Summary:	Network proxy using virtioserial for QEMU host
+Group:		Applications/System
+Requires:       vios-proxy-guest
+Requires:	%{name}-broker = %{version}-%{release}
+Requires(post):     chkconfig
+Requires(preun):    chkconfig
+Requires(preun):    initscripts
+
+%description vios-proxy-guest
+%{name} specific guest initialization scripts
+
 %package lib
 License:	GPLv2+
 Summary:	C libraries used by Matahari agents
 Group:		Applications/System
+Requires:	%{name}-core = %{version}-%{release}
 Requires:	sigar > 1.6.5-0.2
 
 %description lib
@@ -114,10 +147,27 @@ Summary:		C++ library used by Matahari agents
 Group:			Applications/System
 Requires:		%{name}-lib = %{version}-%{release}
 Requires:		qpid-cpp-client-ssl > 0.7
-Requires(pre):	shadow-utils
 
 %description agent-lib
 C++ library containing the base class for Matahari agents
+
+%package python
+License:	GPLv2+
+Summary:	Matahari Python API
+Group:		Applications/System
+Requires:	python-qpid-qmf
+
+%description python
+Python libraries for Matahari
+
+%package shell
+License:	GPLv2+
+Summary:	Matahari shell (mhsh)
+Group:		Applications/System
+Requires:	%{name}-python = %{version}-%{release}
+
+%description shell
+Interactive shell for accessing Matahari agents
 
 %package host
 License:	GPLv2+
@@ -125,6 +175,7 @@ Summary:	QMF agent for remote hosts
 Group:		Applications/System
 Requires:	%{name}-lib = %{version}-%{release}
 Requires:	%{name}-agent-lib = %{version}-%{release}
+Requires:	tuned
 Requires(post):     chkconfig
 Requires(preun):    chkconfig
 Requires(preun):    initscripts
@@ -147,6 +198,20 @@ Provides:	matahari-net = %{version}-%{release}
 %description network
 QMF agent for viewing and controlling network devices
 
+%package rpc
+License:	GPLv2+
+Summary:	QMF agent for RPC plugins
+Group:		Applications/System
+Requires:	%{name}-lib = %{version}-%{release}
+Requires:	%{name}-agent-lib = %{version}-%{release}
+Requires:	%{name}-python = %{version}-%{release}
+Requires(post):     chkconfig
+Requires(preun):    chkconfig
+Requires(preun):    initscripts
+
+%description rpc
+QMF agent for dispatching RPC calls to plugins
+
 %package service
 License:	GPLv2+
 Summary:	QMF agent for system services
@@ -166,6 +231,9 @@ Summary:	QMF agent for post boot configuration services
 Group:		Applications/System
 Requires:	%{name}-lib = %{version}-%{release}
 Requires:	%{name}-agent-lib = %{version}-%{release}
+Requires(post):     chkconfig
+Requires(preun):    chkconfig
+Requires(preun):    initscripts
 
 %description sysconfig
 QMF agent/console for providing post boot capabilities
@@ -202,51 +270,29 @@ QMF console for monitoring various agents
 %patch1 -p1
 %patch2 -p1
 %patch3 -p1
+find . -name *8.gz -exec rm -rf {} +
 %patch4 -p1
 %patch5 -p1
 %patch6 -p1
-%patch7 -p1
-%patch8 -p1
-%patch9 -p1
-%patch10 -p1
-%patch11 -p1
-%patch12 -p1
-%patch13 -p1
-%patch14 -p1
-%patch15 -p1
-%patch16 -p1
-%patch17 -p1
 
 %build
 %{cmake} -DCMAKE_BUILD_TYPE=RelWithDebInfo %{!?with_qmf: -DWITH-QMF:BOOL=OFF} %{!?with_dbus: -DWITH-DBUS:BOOL=OFF} -Dinitdir=%{_initddir} -Dsysconfdir=%{_sysconfdir} .
-make %{?_smp_mflags}
+make -f Makefile %{?_smp_mflags}
 
 %install
 rm -rf %{buildroot}
-make DESTDIR=%{buildroot} install
+make DESTDIR=%{buildroot} -f Makefile install
 
 %if %{defined _unitdir}
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-service
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-network
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-host
+rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-rpc
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-sysconfig
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-sysconfig-console
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-broker
-%endif
-
-%{__install} -d $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/
-%{__install} matahari.sysconf $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/matahari
-
-%if %{with qmf}
-%if %{undefined _unitdir}
-%{__install} -d $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d
-%{__install} matahari-broker $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-broker
-%endif
-
-%{__install} matahari-broker.sysconf $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/matahari-broker
-
-%{__install} -d -m0770 $RPM_BUILD_ROOT/%{_localstatedir}/lib/%{name}
-%{__install} -d -m0775 $RPM_BUILD_ROOT/%{_localstatedir}/run/%{name}
+rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-vios-proxy-host
+rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-vios-proxy-guest
 %endif
 
 %post -n matahari-lib -p /sbin/ldconfig
@@ -262,7 +308,6 @@ rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/rc.d/init.d/matahari-broker
 
 %post host
 /sbin/chkconfig --add matahari-host
-/sbin/service matahari-host condrestart
 
 %preun host
 if [ $1 = 0 ]; then
@@ -275,17 +320,10 @@ if [ "$1" -ge "1" ]; then
     /sbin/service matahari-host condrestart >/dev/null 2>&1 || :
 fi
 
-#== Agent Lib
-
-%pre agent-lib
-getent group qpidd >/dev/null || groupadd -r qpidd
-exit 0
-
 #== Network
 
 %post network
 /sbin/chkconfig --add matahari-network
-/sbin/service matahari-network condrestart
 
 %preun network
 if [ $1 = 0 ]; then
@@ -298,11 +336,26 @@ if [ "$1" -ge "1" ]; then
     /sbin/service matahari-network condrestart >/dev/null 2>&1 || :
 fi
 
+#== RPC
+
+%post rpc
+/sbin/chkconfig --add matahari-rpc
+
+%preun rpc
+if [ $1 = 0 ]; then
+   /sbin/service matahari-rpc stop >/dev/null 2>&1 || :
+   chkconfig --del matahari-rpc
+fi
+
+%postun rpc
+if [ "$1" -ge "1" ]; then
+    /sbin/service matahari-rpc condrestart >/dev/null 2>&1 || :
+fi
+
 #== Services
 
 %post service
 /sbin/chkconfig --add matahari-service
-/sbin/service matahari-service condrestart
 
 %preun service
 if [ $1 = 0 ]; then
@@ -319,7 +372,6 @@ fi
 
 %post sysconfig
 /sbin/chkconfig --add matahari-sysconfig
-/sbin/service matahari-sysconfig condrestart
 
 %preun sysconfig
 if [ $1 = 0 ]; then
@@ -336,7 +388,6 @@ fi
 
 %post broker
 /sbin/chkconfig --add matahari-broker
-/sbin/service matahari-broker condrestart
 
 %preun broker
 if [ $1 = 0 ]; then
@@ -349,21 +400,43 @@ if [ "$1" -ge "1" ]; then
     /sbin/service matahari-broker condrestart >/dev/null 2>&1 || :
 fi
 
-#== consoles
+#== Vios Proxy Host
 
-%post consoles
-/sbin/service matahari-sysconfig-console condrestart
+%post vios-proxy-host
+/sbin/chkconfig --add matahari-vios-proxy-host
 
-%preun consoles
+%preun vios-proxy-host
 if [ $1 = 0 ]; then
-   /sbin/service matahari-sysconfig-console stop >/dev/null 2>&1 || :
-   chkconfig --del matahari-sysconfig-console
+   /sbin/service matahari-vios-proxy-host stop >/dev/null 2>&1 || :
+   chkconfig --del matahari-vios-proxy-host
 fi
 
-%postun consoles
+%postun vios-proxy-host
 if [ "$1" -ge "1" ]; then
-    /sbin/service matahari-sysconfig-console condrestart >/dev/null 2>&1 || :
+    /sbin/service matahari-vios-proxy-host condrestart >/dev/null 2>&1 || :
 fi
+
+#== Vios Proxy Guest
+
+%post vios-proxy-guest
+/sbin/chkconfig --add matahari-vios-proxy-guest
+
+%preun vios-proxy-guest
+if [ $1 = 0 ]; then
+   /sbin/service matahari-vios-proxy-guest stop >/dev/null 2>&1 || :
+   chkconfig --del matahari-vios-proxy-guest
+fi
+
+%postun vios-proxy-guest
+if [ "$1" -ge "1" ]; then
+    /sbin/service matahari-vios-proxy-guest condrestart >/dev/null 2>&1 || :
+fi
+
+#== Core
+
+%pre core
+getent group qpidd >/dev/null || groupadd -r qpidd
+exit 0
 
 %endif
 
@@ -377,24 +450,48 @@ test "x%{buildroot}" != "x" && rm -rf %{buildroot}
 %files agent-lib
 %defattr(644, root, root)
 %attr(755, -, -) %dir %{_datadir}/matahari/
-%config(noreplace) %{_sysconfdir}/sysconfig/matahari
 %doc AUTHORS COPYING
 
 %if %{with qmf}
 %{_libdir}/libmcommon_qmf.so.*
-%dir %attr(0770, root, qpidd) %{_localstatedir}/lib/%{name}
-%ghost %dir %attr(0775, root, qpidd) %{_localstatedir}/run/%{name}
 %endif
 
 %if %{with dbus}
 %{_libdir}/libmcommon_dbus.so.*
 %endif
 
+%files core
+%defattr(644, root, root)
+%doc AUTHORS COPYING
+%config(noreplace) %{_sysconfdir}/sysconfig/matahari
+%if %{with qmf}
+%dir %attr(0770, root, qpidd) %{_localstatedir}/lib/%{name}
+%endif
+
+%files python
+%defattr(644, root, root, 755)
+%doc AUTHORS COPYING
+%{python_sitelib}/matahari/*.py
+%{python_sitelib}/matahari/*.pyc
+%{python_sitelib}/matahari/*.pyo
+
+%files shell
+%defattr(644, root, root, 755)
+%doc AUTHORS COPYING
+%attr(755, -, -) %{_bindir}/mhsh
+%{python_sitelib}/matahari/shell/*.py
+%{python_sitelib}/matahari/shell/*.pyc
+%{python_sitelib}/matahari/shell/*.pyo
+%{python_sitelib}/matahari/shell/interpreter/*.py
+%{python_sitelib}/matahari/shell/interpreter/*.pyc
+%{python_sitelib}/matahari/shell/interpreter/*.pyo
+
 %files lib
 %defattr(644, root, root, 755)
 %{_libdir}/libmcommon.so.*
 %{_libdir}/libmhost.so.*
 %{_libdir}/libmnetwork.so.*
+%{_libdir}/libmrpc.so.*
 %{_libdir}/libmservice.so.*
 %{_libdir}/libmsysconfig.so.*
 %doc AUTHORS COPYING
@@ -420,7 +517,7 @@ test "x%{buildroot}" != "x" && rm -rf %{buildroot}
 %{_datadir}/polkit-1/actions/org.matahariproject.Network.policy
 %{_datadir}/dbus-1/interfaces/org.matahariproject.Network.xml
 %{_datadir}/dbus-1/system-services/org.matahariproject.Network.service
-%{_sysconfdir}/dbus-1/system.d/org.matahariproject.Network.conf
+%config %{_sysconfdir}/dbus-1/system.d/org.matahariproject.Network.conf
 %endif
 
 %files host
@@ -444,7 +541,23 @@ test "x%{buildroot}" != "x" && rm -rf %{buildroot}
 %{_datadir}/polkit-1/actions/org.matahariproject.Host.policy
 %{_datadir}/dbus-1/interfaces/org.matahariproject.Host.xml
 %{_datadir}/dbus-1/system-services/org.matahariproject.Host.service
-%{_sysconfdir}/dbus-1/system.d/org.matahariproject.Host.conf
+%config %{_sysconfdir}/dbus-1/system.d/org.matahariproject.Host.conf
+%endif
+
+%files rpc
+%defattr(644, root, root, 755)
+%doc AUTHORS COPYING
+%attr(0755, -, -) %dir /usr/lib/matahari/plugins
+%if %{defined _unitdir}
+%{_unitdir}/matahari-rpc.service
+%endif
+
+%if %{with qmf}
+%if %{undefined _unitdir}
+%attr(755, root, root) %{_initddir}/matahari-rpc
+%endif
+%attr(755, root, root) %{_sbindir}/matahari-qmf-rpcd
+%{_mandir}/man8/matahari-qmf-rpcd.8*
 %endif
 
 %files service
@@ -469,7 +582,7 @@ test "x%{buildroot}" != "x" && rm -rf %{buildroot}
 %{_datadir}/polkit-1/actions/org.matahariproject.Services.policy
 %{_datadir}/dbus-1/interfaces/org.matahariproject.Services.xml
 %{_datadir}/dbus-1/system-services/org.matahariproject.Services.service
-%{_sysconfdir}/dbus-1/system.d/org.matahariproject.Services.conf
+%config %{_sysconfdir}/dbus-1/system.d/org.matahariproject.Services.conf
 %endif
 
 %files sysconfig
@@ -486,6 +599,15 @@ test "x%{buildroot}" != "x" && rm -rf %{buildroot}
 %endif
 %attr(755, root, root) %{_sbindir}/matahari-qmf-sysconfigd
 %{_mandir}/man8/matahari-qmf-sysconfigd.8*
+%endif
+
+%if %{with dbus}
+%attr(755, root, root) %{_sbindir}/matahari-dbus-sysconfigd
+
+%{_datadir}/polkit-1/actions/org.matahariproject.Sysconfig.policy
+%{_datadir}/dbus-1/interfaces/org.matahariproject.Sysconfig.xml
+%{_datadir}/dbus-1/system-services/org.matahariproject.Sysconfig.service
+%config %{_sysconfdir}/dbus-1/system.d/org.matahariproject.Sysconfig.conf
 %endif
 
 %files consoles
@@ -526,23 +648,56 @@ test "x%{buildroot}" != "x" && rm -rf %{buildroot}
 %exclude %{_sysconfdir}/matahari-broker.conf
 %endif
 
+%files vios-proxy-host
+%defattr(644, root, root, 755)
+%config(noreplace) %{_sysconfdir}/sysconfig/matahari-vios-proxy
+
+%if %{defined _unitdir}
+%{_unitdir}/matahari-vios-proxy-host.service
+%endif
+
+%if %{with qmf}
+%if %{undefined _unitdir}
+%attr(755, root, root) %{_initddir}/matahari-vios-proxy-host
+%endif
+%endif
+
+%files vios-proxy-guest
+%defattr(644, root, root, 755)
+%{_sysconfdir}/udev/rules.d/99-matahari-guest-agent.rules
+%config(noreplace) %{_sysconfdir}/sysconfig/matahari-vios-proxy
+
+%if %{defined _unitdir}
+%{_unitdir}/matahari-vios-proxy-guest.service
+%endif
+
+%if %{with qmf}
+%if %{undefined _unitdir}
+%attr(755, root, root) %{_initddir}/matahari-vios-proxy-guest
+%endif
+%endif
+
 %files devel
 %defattr(644, root, root, 755)
 %doc AUTHORS COPYING
 
 %{_libdir}/libm*.so
 %{_includedir}/matahari.h
+%{_includedir}/matahari/config.h
 %{_includedir}/matahari/logging.h
 %{_includedir}/matahari/utilities.h
+%{_includedir}/matahari/errors.h
 %{_includedir}/matahari/dnssrv.h
 %{_includedir}/matahari/host.h
 %{_includedir}/matahari/network.h
+%{_includedir}/matahari/rpc.h
 %{_includedir}/matahari/sysconfig.h
 %{_includedir}/matahari/services.h
 %{_datadir}/cmake/Modules/FindMatahari.cmake
 
 %if %{with qmf}
 %{_includedir}/matahari/agent.h
+%{_includedir}/matahari/object.h
 %{_includedir}/matahari/mainloop.h
 %{_datadir}/cmake/Modules/FindQPID.cmake
 %endif
@@ -557,10 +712,60 @@ test "x%{buildroot}" != "x" && rm -rf %{buildroot}
 %endif
 
 %changelog
-* Thu Mar 29 2012 Jeff Peeler <jpeeler@redhat.com> 0.4.4-12
-- Do not link to the Qpid client library.
-- Remove unused includes to avoid linking to qpid::sys symbols
-  Resolves: rhbz#806766
+* Tue Apr 24 2012 Zane Bitter <zbitter@redhat.com> 0.6.0-14
+- Actually disable daemons by default
+  Resolves: rhbz#806372
+
+* Tue Mar 27 2012 Jeff Peeler <jpeeler@redhat.com> 0.6.0-13
+- Re-enable non-x86 builds
+  Resolves: rhbz#806923
+
+* Tue Mar 27 2012 Jeff Peeler <jpeeler@redhat.com> 0.6.0-12
+- Rebuild with updated qpid (0.14) package.
+
+* Mon Mar 26 2012 Zane Bitter <zbitter@redhat.com> 0.6.0-11
+- Disable non-x86 builds
+  Resolves: rhbz#806923
+
+* Fri Mar 23 2012 Jeff Peeler <jpeeler@redhat.com> 0.6.0-10
+- Remove linking requirement for libqpidclient.
+- Further Resolves: rhbz#805367
+
+* Fri Mar 23 2012 Zane Bitter <zbitter@redhat.com> 0.6.0-9
+- Disable daemons by default
+  Resolves: rhbz#806372
+
+* Wed Mar 21 2012 Jeff Peeler <jpeeler@redhat.com> 0.6.0-8
+- Remove unused includes to avoid linking to qpid::sys symbols.
+- Resolves: rhbz#805367
+
+* Fri Mar 16 2012 Jeff Peeler <jpeeler@redhat.com> 0.6.0-7
+- Rebuild to link with updated qpid package.
+
+* Thu Mar 15 2012 Jeff Peeler <jpeeler@redhat.com> 0.6.0-6
+- Fix man pages not being installed properly.
+- Fix permission on lockfile preventing broker daemon startup.
+- Resolves: rhbz#803718, rhbz#803590
+
+* Fri Mar 9  2012 Zane Bitter <zbitter@redhat.com> 0.6.0-5
+- Fix buffer overflow in broker wrapper
+  Related: rhbz#795430
+- Move shadow-utils dependency to correct subpackage
+
+* Thu Mar 1 2012 Russell Bryant <rbryant@redhat.com> 0.6.0-4
+- Remove unnecessary condrestart calls in %%post scripts.
+- Make the broker wrapper tell qpidd to only load the ssl plugin.
+- Resolves: rhbz#752325, rhbz#795430, rhbz#723078
+
+* Thu Feb 16 2012 Zane Bitter <zbitter@redhat.com> 0.6.0-3
+- Remove hard dependency on puppet
+
+* Wed Feb 15 2012 Zane Bitter <zbitter@redhat.com> 0.6.0-2
+- Add -broker dependency on -lib
+
+* Tue Feb 14 2012 Zane Bitter <zbitter@redhat.com> 0.6.0-1
+- Rebase to upstream release 0.6.0
+  Resolves: rhbz#759243
 
 * Mon Nov 07 2011 Matthew Garrett <mjg@redhat.com> 0.4.4-11
 - Disable by default (rhbz#751790)751790

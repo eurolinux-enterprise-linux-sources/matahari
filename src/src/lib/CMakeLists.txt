@@ -1,6 +1,9 @@
 # Library
 
 set(LIBS mcommon mhost mnetwork mservice msysconfig)
+if(NOT WIN32)
+    set(LIBS ${LIBS} mrpc)
+endif(NOT WIN32)
 include_directories(${pcre_INCLUDE_DIRS})
 
 # See http://sourceware.org/autobook/autobook/autobook_91.html for
@@ -22,31 +25,40 @@ add_library (mnetwork SHARED network.c  network_${VARIANT}.c)
 set_target_properties(mnetwork PROPERTIES SOVERSION 1.0.0)
 target_link_libraries(mnetwork ${pcre_LIBRARIES} mcommon ${SIGAR} ${glib_LIBRARIES})
 
+if(NOT WIN32)
+add_library (mrpc SHARED rpc.c rpc-python.c)
+set_target_properties(mrpc PROPERTIES SOVERSION 1.0.0)
+target_link_libraries(mrpc mcommon ${python_LIBRARIES})
+endif(NOT WIN32)
+
 add_library (mservice SHARED services.c services_${VARIANT}.c)
 set_target_properties(mservice PROPERTIES SOVERSION 1.0.0)
 target_link_libraries(mservice ${pcre_LIBRARIES} mcommon ${SIGAR} ${glib_LIBRARIES})
 
 add_library (msysconfig SHARED sysconfig.c sysconfig_${VARIANT}.c)
 set_target_properties(msysconfig PROPERTIES SOVERSION 1.0.0)
-target_link_libraries(msysconfig ${pcre_LIBRARIES} mcommon ${glib_LIBRARIES})
+target_link_libraries(msysconfig ${pcre_LIBRARIES} mcommon mservice ${glib_LIBRARIES} ${augeas_LIBRARIES})
+include_directories(${augeas_INCLUDE_DIRS})
 
 if(WIN32)
     foreach (lib ${LIBS})
-        target_link_libraries(${lib} wsock32 dnsapi rpcrt4)
+        target_link_libraries(${lib} wsock32 dnsapi rpcrt4 wininet)
         install(TARGETS ${lib} DESTINATION sbin)
     endforeach (lib ${LIBS})
 else(WIN32)
     foreach (lib ${LIBS})
-	target_link_libraries(${lib} curl)
+        target_link_libraries(${lib} curl)
         install(TARGETS ${lib} DESTINATION lib${LIB_SUFFIX})
     endforeach (lib ${LIBS})
 endif(WIN32)
 
 if(WITH-QMF)
-    add_library (mcommon_qmf SHARED mh_agent.cpp)
+    add_library (mcommon_qmf SHARED mh_agent.cpp mh_object.cpp)
     set_target_properties(mcommon_qmf PROPERTIES SOVERSION 1.0.0)
 
-    target_link_libraries(mcommon_qmf mcommon ${QPIDCOMMON_LIBRARY} ${QPIDCLIENT_LIBRARY} ${QPIDMESSAGING_LIBRARY} ${QMF2_LIBRARY})
+    target_link_libraries(mcommon_qmf mcommon ${QPIDCOMMON_LIBRARY}
+        ${QPIDCLIENT_LIBRARY} ${QPIDMESSAGING_LIBRARY} ${QMF2_LIBRARY}
+        ${nss_LIBRARIES})
     if(QPIDTYPES_LIBRARY)
         target_link_libraries(mcommon_qmf ${QPIDTYPES_LIBRARY})
     endif(QPIDTYPES_LIBRARY)

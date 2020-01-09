@@ -25,6 +25,10 @@
 #ifndef __MH_SERVICES__
 #define __MH_SERVICES__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <glib.h>
 #include <stdio.h>
 #include "matahari/mainloop.h"
@@ -32,6 +36,8 @@
 /* TODO: Autodetect these two in CMakeList.txt */
 #define OCF_ROOT "/usr/lib/ocf"
 #define LSB_ROOT "/etc/init.d"
+
+#define SYSTEMCTL "/bin/systemctl"
 
 enum lsb_exitcode {
     LSB_OK = 0,
@@ -145,7 +151,7 @@ typedef struct svc_action_s
  * \return a list of what was found.  The list items are gchar *.  This list _must_
  *         be destroyed using g_list_free_full(list, free).
  */
-extern GList *
+GList *
 get_directory_list(const char *root, gboolean files);
 
 /**
@@ -154,7 +160,7 @@ get_directory_list(const char *root, gboolean files);
  * \return a list of services.  The list items are gchar *.  This list _must_
  *         be destroyed using g_list_free_full(list, free).
  */
-extern GList *
+GList *
 services_list(void);
 
 /**
@@ -165,7 +171,7 @@ services_list(void);
  * \return a list of providers.  The list items are gchar *.  This list _must_
  *         be destroyed using g_list_free_full(list, free).
  */
-extern GList *
+GList *
 resources_list_providers(const char *standard);
 
 /**
@@ -177,25 +183,73 @@ resources_list_providers(const char *standard);
  * \return a list of resource agents.  The list items are gchar *.  This list _must_
  *         be destroyed using g_list_free_full(list, free).
  */
-extern GList *
+GList *
 resources_list_agents(const char *standard, const char *provider);
 
-extern svc_action_t *services_action_create(
-    const char *name, const char *action, int interval /* ms */, int timeout /* ms */);
+/**
+ * Get list of available standards
+ *
+ * \return a list of resource standards. The list items are char *. This list _must_
+ *         be destroyed using g_list_free_full(list, free).
+ */
+GList *
+resources_list_standards(void);
 
-/* After the call, 'params' is owned, and later free'd by the svc_action_t result */
-extern svc_action_t *resources_action_create(
-    const char *name, const char *standard, const char *provider, const char *agent,
-    const char *action, int interval /* ms */, int timeout /* ms */, GHashTable *params);
+svc_action_t *
+services_action_create(const char *name, const char *action,
+                       int interval /* ms */, int timeout /* ms */);
 
-extern void services_action_free(svc_action_t *op);
+/**
+ * Create a resources action.
+ *
+ * \param[in] timeout the timeout in milliseconds
+ * \param[in] interval how often to repeat this action, in milliseconds.
+ *            If this value is 0, only execute this action one time.
+ *
+ * \post After the call, 'params' is owned, and later free'd by the svc_action_t result
+ */
+svc_action_t *
+resources_action_create(const char *name, const char *standard,
+                        const char *provider, const char *agent,
+                        const char *action, int interval /* ms */,
+                        int timeout /* ms */, GHashTable *params);
 
-extern gboolean services_action_sync(svc_action_t *op);
-extern gboolean services_action_async(svc_action_t *op,
-                                      void (*action_callback)(svc_action_t *));
+/**
+ * Utilize services API to execute an arbitrary command.
+ *
+ * This API has useful infrastructure in place to be able to run a command
+ * in the background and get notified via a callback when the command finishes.
+ *
+ * \param[in] exec command to execute
+ * \param[in] args arguments to the command, NULL terminated
+ *
+ * \return a svc_action_t object, used to pass to the execute function
+ * (services_action_sync() or services_action_async()) and is
+ * provided to the callback.
+ */
+svc_action_t *
+mh_services_action_create_generic(const char *exec, const char *args[]);
 
-extern gboolean services_action_cancel(const char *name, const char *action,
-                                       int interval);
+void
+services_action_free(svc_action_t *op);
+
+gboolean
+services_action_sync(svc_action_t *op);
+
+/**
+ * Run an action asynchronously.
+ *
+ * \param[in] op services action data
+ * \param[in] action_callback callback for when the action completes
+ *
+ * \retval TRUE succesfully started execution
+ * \retval FALSE failed to start execution, no callback will be received
+ */
+gboolean
+services_action_async(svc_action_t *op, void (*action_callback)(svc_action_t *));
+
+gboolean
+services_action_cancel(const char *name, const char *action, int interval);
 
 static inline enum ocf_exitcode
 services_get_ocf_exitcode(char *action, int lsb_exitcode)
@@ -218,5 +272,9 @@ services_get_ocf_exitcode(char *action, int lsb_exitcode)
      * for rc <= 7 */
     return (enum ocf_exitcode)lsb_exitcode;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __MH_SERVICES__ */

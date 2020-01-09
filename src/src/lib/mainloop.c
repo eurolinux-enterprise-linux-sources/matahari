@@ -16,9 +16,7 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef _GNU_SOURCE
-#  define _GNU_SOURCE
-#endif
+#include "config.h"
 
 #include <stdlib.h>
 #include <signal.h>
@@ -482,7 +480,9 @@ child_death_dispatch(int sig)
             return;
 
         } else {
-            if (errno != ECHILD) {
+            if (errno == EAGAIN) {
+                continue;
+            } else if (errno != ECHILD) {
                 mh_perror(LOG_ERR, "wait3() failed");
             }
             break;

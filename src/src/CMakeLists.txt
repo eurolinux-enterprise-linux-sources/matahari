@@ -1,5 +1,10 @@
 #set(CMAKE_VERBOSE_MAKEFILE ON)
 
+include(FindPkgConfig)
+if(NOT PKG_CONFIG_FOUND)
+   message("pkg-config not found")
+endif(NOT PKG_CONFIG_FOUND)
+
 if(WIN32)
    set(VARIANT "windows")
    set(SUPPORT_TRACING 0)
@@ -10,6 +15,12 @@ if(WIN32)
 
 else(WIN32)
    set(VARIANT "linux")
+
+   # Enable TLS/SSL support
+   add_definitions(-DMH_SSL)
+   pkg_check_modules(nss REQUIRED nss)
+   include_directories(${nss_INCLUDE_DIRS})
+
    # DBus makes sense only on linux
    # WITH-DBUS == OFF means no DBus,
    #              TRY means autodetection
@@ -34,8 +45,8 @@ set(CONSOLE_MAN_DESC "Console for the Matahari suite of remote agents")
 
 set(DAEMON_TYPE "AGENT")
 
-include(FindPkgConfig)
-include_directories("${CMAKE_CURRENT_BINARY_DIR}")
+include_directories("${CMAKE_CURRENT_BINARY_DIR}/include")
+include_directories("${CMAKE_CURRENT_BINARY_DIR}/include/matahari")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/common")
@@ -53,10 +64,6 @@ check_include_files (resolv.h HAVE_RESOLV_H)
 include (CheckFunctionExists)
 check_function_exists (asprintf HAVE_ASPRINTF)
 check_function_exists (time HAVE_TIME)
-
-if(NOT PKG_CONFIG_FOUND)
-   message("pkg-config not found")
-endif(NOT PKG_CONFIG_FOUND)
 
 ## Modules
 # systemd
@@ -101,12 +108,29 @@ include_directories(${glib_INCLUDE_DIRS})
 SET(CMAKE_REQUIRED_LIBRARIES ${glib_LIBRARIES})
 check_function_exists (g_list_free_full HAVE_G_LIST_FREE_FULL)
 
+# Python
+if(NOT WIN32)
+pkg_check_modules(python REQUIRED python)
+include_directories(${python_INCLUDE_DIRS})
+endif(NOT WIN32)
+
 # cURL
 if(NOT WIN32)
     find_library(CURL curl)
     if(CURL STREQUAL "CURL-NOTFOUND")
         message(FATAL_ERROR "libcurl not found.")
     endif(CURL STREQUAL "CURL-NOTFOUND")
+endif(NOT WIN32)
+
+# Augeas
+# At least version 0.9.0 - we need aug_srun command
+if(NOT WIN32)
+    pkg_check_modules(augeas augeas>=0.9.0)
+    if(augeas_FOUND)
+        set(HAVE_AUGEAS 1)
+    else(augeas_FOUND)
+        message("Augeas headers/library >= 0.9.0 not found.")
+    endif(augeas_FOUND)
 endif(NOT WIN32)
 
 # Include QMF and DBus generation macros
@@ -163,21 +187,26 @@ endif(WITH-QMF)
 
 ### Subdirectories
 add_subdirectory(broker)
+add_subdirectory(python)
 add_subdirectory(lib)
 add_subdirectory(host)
 add_subdirectory(network)
+add_subdirectory(rpc)
 add_subdirectory(service)
 add_subdirectory(sysconfig)
-add_subdirectory(tests)
+add_subdirectory(unittests)
 
 ### Installation
 install(FILES ${SCHEMAS} DESTINATION share/matahari)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/matahari.h DESTINATION include)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/matahari/config.h DESTINATION include/matahari)
 install(FILES include/matahari/logging.h DESTINATION include/matahari)
 install(FILES include/matahari/utilities.h DESTINATION include/matahari)
+install(FILES include/matahari/errors.h DESTINATION include/matahari)
 install(FILES include/matahari/dnssrv.h DESTINATION include/matahari)
 install(FILES include/matahari/host.h DESTINATION include/matahari)
 install(FILES include/matahari/network.h DESTINATION include/matahari)
+install(FILES include/matahari/rpc.h DESTINATION include/matahari)
 install(FILES include/matahari/sysconfig.h DESTINATION include/matahari)
 install(FILES include/matahari/services.h DESTINATION include/matahari)
 install(FILES cmake/modules/FindMatahari.cmake DESTINATION share/cmake/Modules)
@@ -186,6 +215,7 @@ install(FILES cmake/modules/MatahariMacros.cmake DESTINATION share/cmake/Modules
 if(WITH-QMF)
     install(FILES cmake/modules/FindQPID.cmake DESTINATION share/cmake/Modules)
     install(FILES include/matahari/agent.h DESTINATION include/matahari)
+    install(FILES include/matahari/object.h DESTINATION include/matahari)
     install(FILES include/matahari/mainloop.h DESTINATION include/matahari)
 endif(WITH-QMF)
 
@@ -197,6 +227,6 @@ if(WITH-DBUS)
     install(FILES include/matahari/gobject_class.h DESTINATION include/matahari)
 endif(WITH-DBUS)
 
-configure_file (${CMAKE_CURRENT_SOURCE_DIR}/include/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h)
+configure_file (${CMAKE_CURRENT_SOURCE_DIR}/include/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/include/matahari/config.h)
 configure_file (${CMAKE_CURRENT_SOURCE_DIR}/include/matahari.h.in ${CMAKE_CURRENT_BINARY_DIR}/include/matahari.h)
 

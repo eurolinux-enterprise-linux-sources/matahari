@@ -31,13 +31,32 @@
 
 #include <glib.h>
 
-extern const char *
+#define TIMEOUT 10
+#define TA_PATH          "/usr/bin/"
+#define TA_SETPROFILE    "profile"
+#define TA_GETPROFILE    "active"
+#define TA_LISTPROFILES  "list"
+#define TA_OFF           "off"
+#define TUNEDADM TA_PATH "tuned-adm"
+
+#define SYSTEM32 "system32"
+#define POWERCFG "powercfg"
+#define PC_SETPROFILE "-SETACTIVE"
+#define PC_GETPROFILE "-GETACTIVESCHEME"
+#define PC_LISTPROFILES "-LIST"
+#define GUID "GUID: "
+
+#define STR_UNK   "UNKNOWN"
+#define STR_ERR   "ERROR"
+
+
+const char *
 host_os_get_cpu_flags(void);
 
-extern void
+void
 host_os_reboot(void);
 
-extern void
+void
 host_os_shutdown(void);
 
 /**
@@ -46,14 +65,34 @@ host_os_shutdown(void);
  * \retval 0 success
  * \retval non-zero failure
  */
-extern int
+int
 host_os_identify(void);
 
-extern char *host_os_machine_uuid(void);
-extern char *host_os_custom_uuid(void);
-extern char *host_os_reboot_uuid(void);
-extern const char *host_os_agent_uuid(void);
+char *
+host_os_machine_uuid(void);
 
-extern int host_os_set_custom_uuid(const char *uuid);
+char *
+host_os_ec2_instance_id(void);
+
+char *
+host_os_custom_uuid(void);
+
+char *
+host_os_reboot_uuid(void);
+
+char *
+host_os_agent_uuid(void);
+
+int
+host_os_set_custom_uuid(const char *uuid);
+
+enum mh_result
+host_os_set_power_profile(const char *profile);
+
+enum mh_result
+host_os_get_power_profile(char **profile);
+
+GList *
+host_os_list_power_profiles(void);
 
 #endif /* __MH_HOST_PRIVATE_H__ */

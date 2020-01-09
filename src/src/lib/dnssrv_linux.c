@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#include "config.h"
+
 #include <string.h>
 #include <errno.h>
 #include <glib.h>
@@ -29,6 +31,7 @@
 #include <limits.h>
 
 #include "dnssrv_private.h"
+#include "matahari/utilities.h"
 #include "matahari/dnssrv.h"
 #include "matahari/dnssrv_internal.h"
 

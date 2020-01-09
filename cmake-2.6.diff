@@ -1,0 +1,49 @@
+commit a03686d7b10a1d14a5695cc593e80eed0d91fd71
+Author: Zane Bitter <zbitter@redhat.com>
+Date:   Wed Feb 15 11:46:38 2012 +0100
+
+    Fix for compatibility with CMake 2.6
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 6c087f0..6ff5ad2 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -110,8 +110,8 @@ check_function_exists (g_list_free_full HAVE_G_LIST_FREE_FULL)
+ 
+ # Python
+ if(NOT WIN32)
+-pkg_check_modules(python REQUIRED python)
+-include_directories(${python_INCLUDE_DIRS})
++    find_package(PythonLibs)
++    include_directories(${PYTHON_INCLUDE_PATH})
+ endif(NOT WIN32)
+ 
+ # cURL
+diff --git a/src/lib/CMakeLists.txt b/src/lib/CMakeLists.txt
+index 6d11d5f..c51e70f 100644
+--- a/src/lib/CMakeLists.txt
++++ b/src/lib/CMakeLists.txt
+@@ -28,7 +28,7 @@ target_link_libraries(mnetwork ${pcre_LIBRARIES} mcommon ${SIGAR} ${glib_LIBRARI
+ if(NOT WIN32)
+ add_library (mrpc SHARED rpc.c rpc-python.c)
+ set_target_properties(mrpc PROPERTIES SOVERSION 1.0.0)
+-target_link_libraries(mrpc mcommon ${python_LIBRARIES})
++target_link_libraries(mrpc mcommon ${PYTHON_LIBRARY})
+ endif(NOT WIN32)
+ 
+ add_library (mservice SHARED services.c services_${VARIANT}.c)
+diff --git a/src/python/CMakeLists.txt b/src/python/CMakeLists.txt
+index 6afb289..857219f 100644
+--- a/src/python/CMakeLists.txt
++++ b/src/python/CMakeLists.txt
+@@ -3,8 +3,8 @@ FIND_PACKAGE(PythonInterp)
+ 
+ macro(py_module MODULE DIRECTORY)
+     # Copy the Python file to the Binary directory
+-    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/${DIRECTORY}/${MODULE}.py
+-         DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/${DIRECTORY})
++    execute_process(COMMAND mkdir -p ${CMAKE_CURRENT_BINARY_DIR}/${DIRECTORY})
++    execute_process(COMMAND cp ${CMAKE_CURRENT_SOURCE_DIR}/${DIRECTORY}/${MODULE}.py ${CMAKE_CURRENT_BINARY_DIR}/${DIRECTORY}/)
+ 
+     # Compile .pyc and .pyo files
+     execute_process(COMMAND ${PYTHON_EXECUTABLE} -m py_compile ${MODULE}.py

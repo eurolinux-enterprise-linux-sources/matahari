@@ -1,0 +1,48 @@
+commit e5e24d3926b8baa0139d0d91c144599a5a857d42
+Author: Zane Bitter <zbitter@redhat.com>
+Date:   Tue Feb 21 11:13:26 2012 +0100
+
+    Broker: rhbz#795430 - Ignore modules except for SSL
+    
+    Don't load all available Qpid modules in the broker; only the SSL module.
+    This prevents newly-added modules (such as the Qpid store) being
+    automatically loaded. In that particular case, it was causing SELinux
+    issues.
+    
+    Signed-off-by: Zane Bitter <zbitter@redhat.com>
+
+diff --git a/src/broker/broker.c b/src/broker/broker.c
+index c443266..64548c1 100644
+--- a/src/broker/broker.c
++++ b/src/broker/broker.c
+@@ -70,7 +70,7 @@ static char **broker_args(int argc, char * const argv[])
+ {
+     int i = 0, o = 0;
+     char portarg[13];
+-    char **newargs = malloc(sizeof(char *) * (argc + 2 + 1));
++    char **newargs = malloc(sizeof(char *) * (argc + 4 + 1));
+ 
+     if (!newargs) {
+         mh_err("Failed to allocate argument list");
+@@ -85,6 +85,9 @@ static char **broker_args(int argc, char * const argv[])
+     APPEND_ARG(newargs, o, portarg);
+     APPEND_ARG(newargs, o, "--data-dir=" LOCAL_STATE_DIR "/lib/matahari");
+ 
++    APPEND_ARG(newargs, o, "--no-module-dir");
++    APPEND_ARG(newargs, o, "--load-module=" LIB_DIR "/qpid/daemon/ssl.so");
++
+     while (i < argc) {
+         APPEND_ARG(newargs, o, argv[i++]);
+     }
+diff --git a/src/include/config.h.in b/src/include/config.h.in
+index c34bea5..05b61da 100644
+--- a/src/include/config.h.in
++++ b/src/include/config.h.in
+@@ -11,6 +11,7 @@
+ #cmakedefine HAVE_AUGEAS 1
+ 
+ #define LOCAL_STATE_DIR "@localstatedir@"
++#define LIB_DIR         "@LIB_INSTALL_DIR@"
+ 
+ #ifndef _GNU_SOURCE
+ #define _GNU_SOURCE

@@ -1,0 +1,67 @@
+From 70657d75834b9c5a4d92f80ee236a64f5ae9c7f9 Mon Sep 17 00:00:00 2001
+From: Jeff Peeler <jpeeler@redhat.com>
+Date: Tue, 20 Mar 2012 16:07:02 -0400
+Subject: [PATCH] Remove unused includes to avoid linking to qpid::sys symbols
+
+Since libqpidcommon has an unstable ABI, remove its dependence so that Qpid
+rebuilds do not affect Matahari.
+
+Signed-off-by: Jeff Peeler <jpeeler@redhat.com>
+---
+ src/include/matahari/agent.h |    2 --
+ src/lib/CMakeLists.txt       |    2 +-
+ src/lib/mh_agent.cpp         |    5 -----
+ 3 files changed, 1 insertions(+), 8 deletions(-)
+
+diff --git a/src/include/matahari/agent.h b/src/include/matahari/agent.h
+index 7108c2a..06032b9 100644
+--- a/src/include/matahari/agent.h
++++ b/src/include/matahari/agent.h
+@@ -26,8 +26,6 @@
+ #define __MATAHARI_DAEMON_H
+ 
+ #include <string>
+-#include <qpid/sys/Time.h>
+-#include <qpid/agent/ManagementAgent.h>
+ #include <qpid/management/Manageable.h>
+ #include <qpid/messaging/Connection.h>
+ #include <qmf/AgentEvent.h>
+diff --git a/src/lib/CMakeLists.txt b/src/lib/CMakeLists.txt
+index 6d11d5f..b64e022 100644
+--- a/src/lib/CMakeLists.txt
++++ b/src/lib/CMakeLists.txt
+@@ -56,7 +56,7 @@ if(WITH-QMF)
+     add_library (mcommon_qmf SHARED mh_agent.cpp mh_object.cpp)
+     set_target_properties(mcommon_qmf PROPERTIES SOVERSION 1.0.0)
+ 
+-    target_link_libraries(mcommon_qmf mcommon ${QPIDCOMMON_LIBRARY}
++    target_link_libraries(mcommon_qmf mcommon
+         ${QPIDCLIENT_LIBRARY} ${QPIDMESSAGING_LIBRARY} ${QMF2_LIBRARY}
+         ${nss_LIBRARIES})
+     if(QPIDTYPES_LIBRARY)
+diff --git a/src/lib/mh_agent.cpp b/src/lib/mh_agent.cpp
+index 83beb83..ee30108 100644
+--- a/src/lib/mh_agent.cpp
++++ b/src/lib/mh_agent.cpp
+@@ -34,9 +34,6 @@
+ #include <stdlib.h>
+ #include <cstdlib>
+ 
+-#include <qpid/sys/Time.h>
+-#include <qpid/agent/ManagementAgent.h>
+-#include <qpid/client/ConnectionSettings.h>
+ #include <qmf/DataAddr.h>
+ #include <qmf/Schema.h>
+ #include <qmf/SchemaProperty.h>
+@@ -58,8 +55,6 @@ extern "C" {
+ }
+ #endif
+ 
+-using namespace qpid::management;
+-using namespace qpid::client;
+ using namespace std;
+ 
+ typedef qpid::types::Variant::Map OptionsMap;
+-- 
+1.7.7.6
+

@@ -16,9 +16,7 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef WIN32
 #include "config.h"
-#endif
 
 #include <assert.h>
 #include <glib.h>
@@ -186,8 +184,7 @@ mh_dnssrv_lookup_single(const char *query, char *host, size_t host_len, uint16_t
     record = g_list_nth_data(records, 0);
 
     if (record) {
-        strncpy(host, record->host, host_len);
-        host[host_len - 1] = '\0';
+        mh_string_copy(host, record->host, host_len);
         *port = record->port;
     }
 

@@ -16,7 +16,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#define _GNU_SOURCE
+#include "config.h"
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -55,6 +56,8 @@ read_output(int fd, gpointer user_data)
     svc_action_t* op = (svc_action_t *) user_data;
     char buf[500];
     static const size_t buf_read_len = sizeof(buf) - 1;
+
+    mh_trace("%p", op);
 
     if (fd == op->opaque->stderr_fd) {
         is_err = TRUE;
@@ -98,6 +101,9 @@ static void
 pipe_out_done(gpointer user_data)
 {
     svc_action_t* op = (svc_action_t *) user_data;
+
+    mh_trace("%p", op);
+
     op->opaque->stdout_gsource = NULL;
     if (op->opaque->stdout_fd > STDERR_FILENO) {
         close(op->opaque->stdout_fd);
@@ -136,7 +142,7 @@ set_ocf_env_with_prefix(gpointer key, gpointer value, gpointer user_data)
 static void
 add_OCF_env_vars(svc_action_t *op)
 {
-    if (strcmp("ocf", op->standard) != 0) {
+    if (!op->standard || strcasecmp("ocf", op->standard) != 0) {
         return;
     }
 
@@ -466,7 +472,9 @@ services_os_set_exec(svc_action_t *op)
         op->opaque->args[3] = NULL;
 
     } else {
-        asprintf(&op->opaque->exec, "%s/%s", LSB_ROOT, op->agent);
+        if (asprintf(&op->opaque->exec, "%s/%s", LSB_ROOT, op->agent) == -1) {
+            return;
+        }
         op->opaque->args[0] = strdup(op->opaque->exec);
         op->opaque->args[1] = strdup(op->action);
         op->opaque->args[2] = NULL;
@@ -496,4 +504,43 @@ resources_os_list_ocf_agents(const char *provider)
         return get_directory_list(buffer, TRUE);
     }
     return NULL;
+}
+
+GList *
+resources_os_list_systemd_services(void)
+{
+    GList *list = NULL;
+    char *ptr, *service, *end;
+    svc_action_t *action;
+    int len;
+    const char *args[] = { "list-units", "--all", "--type=service", "--full",
+                           "--no-pager", NULL };
+
+    if (!(action = mh_services_action_create_generic(SYSTEMCTL, args))) {
+        return NULL;
+    }
+    if (!services_action_sync(action)) {
+        services_action_free(action);
+        return NULL;
+    }
+    ptr = action->stdout_data;
+    // Skip first line with column labels
+    while ((ptr = strchr(ptr, '\n')) != NULL) {
+        // Skip the line break
+        ptr++;
+
+        // Read beggining of the line until ".service"
+        if (!(end = strstr(ptr, ".service")))
+            break;
+        // Length of service name
+        len = end - ptr;
+        // Append the name to the list of services
+        if (!(service = malloc(sizeof(char) * (len + 1)))) {
+            break;
+        }
+        service = mh_string_copy(service, ptr, len + 1);
+        list = g_list_append(list, service);
+    }
+    services_action_free(action);
+    return list;
 }

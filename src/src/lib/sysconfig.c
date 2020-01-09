@@ -16,6 +16,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#include "config.h"
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -26,8 +28,9 @@
 #include <glib/gprintf.h>
 
 #include "matahari/logging.h"
-#include "matahari/sysconfig.h"
 #include "matahari/utilities.h"
+#include "matahari/sysconfig.h"
+#include "matahari/sysconfig_internal.h"
 #include "sysconfig_private.h"
 
 MH_TRACE_INIT_DATA(mh_sysconfig);
@@ -35,7 +38,7 @@ MH_TRACE_INIT_DATA(mh_sysconfig);
 #ifdef WIN32
 static const char DEFAULT_KEYS_DIR[] = "c:\\";
 #else
-static const char DEFAULT_KEYS_DIR[] = "/var/lib/matahari/";
+static const char DEFAULT_KEYS_DIR[] = "/var/lib/matahari/sysconfig-keys/";
 #endif
 
 /*!
@@ -49,8 +52,7 @@ static const char *
 keys_dir_get(void)
 {
     if (!*_keys_dir) {
-        strncpy(_keys_dir, DEFAULT_KEYS_DIR, sizeof(_keys_dir) - 1);
-        _keys_dir[sizeof(_keys_dir) - 1] = '\0';
+        mh_string_copy(_keys_dir, DEFAULT_KEYS_DIR, sizeof(_keys_dir));
     }
 
     return _keys_dir;
@@ -59,21 +61,64 @@ keys_dir_get(void)
 void
 mh_sysconfig_keys_dir_set(const char *path)
 {
-    strncpy(_keys_dir, path, sizeof(_keys_dir) - 1);
-    _keys_dir[sizeof(_keys_dir) - 1] = '\0';
+    mh_string_copy(_keys_dir, path, sizeof(_keys_dir));
 }
 
-static gboolean
+/**
+ * \internal
+ * \brief Chcek sanity of a key
+ *
+ * \retval 0 sane
+ * \retval non-zero bonkers
+ */
+static int
+check_key_sanity(const char *key)
+{
+    static const char VALID_CHARS[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-.";
+    char sanitized_key[PATH_MAX];
+
+    if (mh_strlen_zero(key)) {
+        mh_err("key cannot be empty");
+        return -1;
+    }
+
+    if (g_str_has_prefix(key, ".")) {
+        mh_err("Invalid key filename %s", key);
+        return -1;
+    }
+
+    mh_string_copy(sanitized_key, key, sizeof(sanitized_key));
+    g_strcanon(sanitized_key, VALID_CHARS, '!');
+    if (strchr(sanitized_key, '!') != NULL) {
+        mh_err("Invalid key filename %s", sanitized_key);
+        return -1;
+    }
+
+    return 0;
+}
+
+static enum mh_result
 set_key(const char *key, const char *contents)
 {
     char key_file[PATH_MAX];
 
+    if (check_key_sanity(key)) {
+        return MH_RES_INVALID_ARGS;
+    }
+
+    if (!g_file_test(keys_dir_get(), G_FILE_TEST_IS_DIR) &&
+        g_mkdir(keys_dir_get(), 0755) < 0) {
+        mh_err("Could not create keys directory %s", keys_dir_get());
+        return MH_RES_OTHER_ERROR;
+    }
+
     g_snprintf(key_file, sizeof(key_file), "%s%s", keys_dir_get(), key);
     if (!g_file_set_contents(key_file, contents, strlen(contents), NULL)) {
         mh_err("Could not set file %s", key_file);
-        return FALSE;
+        return MH_RES_OTHER_ERROR;
     }
-    return TRUE;
+
+    return MH_RES_SUCCESS;
 }
 
 static char *
@@ -83,22 +128,24 @@ get_key(const char *key)
     char *contents = NULL;
     size_t length;
 
+    if (check_key_sanity(key)) {
+        return NULL;
+    }
+
     g_snprintf(key_file, sizeof(key_file), "%s%s", keys_dir_get(), key);
     if (g_file_test(key_file, G_FILE_TEST_EXISTS)) {
-        if(g_file_get_contents(key_file, &contents, &length, NULL)) {
+        if (g_file_get_contents(key_file, &contents, &length, NULL)) {
             return contents;
         }
     }
+
     return contents;
 }
 
-int
+enum mh_result
 mh_sysconfig_set_configured(const char *key, const char *contents)
 {
-    if (!set_key(key, contents)) {
-        return FALSE;
-    }
-    return TRUE;
+    return set_key(key, contents);
 }
 
 char *
@@ -107,19 +154,31 @@ mh_sysconfig_is_configured(const char *key)
     return get_key(key);
 }
 
-int
-mh_sysconfig_run_uri(const char *uri, uint32_t flags, const char *scheme,
-        const char *key) {
-    return sysconfig_os_run_uri(uri, flags, scheme, key);
+enum mh_result
+mh_sysconfig_run_uri(const char *uri, uint32_t flags, const char *scheme, const char *key,
+                     mh_sysconfig_result_cb result_cb, void *cb_data)
+{
+    if (check_key_sanity(key)) {
+        return MH_RES_INVALID_ARGS;
+    }
+
+    return sysconfig_os_run_uri(uri, flags, scheme, key, result_cb, cb_data);
 }
 
-int
+enum mh_result
 mh_sysconfig_run_string(const char *string, uint32_t flags, const char *scheme,
-        const char *key) {
-    return sysconfig_os_run_string(string, flags, scheme, key);
+                        const char *key, mh_sysconfig_result_cb result_cb,
+                        void *cb_data)
+{
+    if (check_key_sanity(key)) {
+        return MH_RES_INVALID_ARGS;
+    }
+
+    return sysconfig_os_run_string(string, flags, scheme, key, result_cb, cb_data);
 }
 
-const char *
-mh_sysconfig_query(const char *query, uint32_t flags, const char *scheme) {
+char *
+mh_sysconfig_query(const char *query, uint32_t flags, const char *scheme)
+{
     return sysconfig_os_query(query, flags, scheme);
 }

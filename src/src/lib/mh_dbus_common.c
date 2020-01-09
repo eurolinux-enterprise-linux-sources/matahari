@@ -20,8 +20,13 @@
  *
  */
 
+#include "config.h"
+
 #include "matahari/dbus_common.h"
 #include "matahari/logging.h"
+#include "matahari/mainloop.h"
+#include "matahari/errors.h"
+#include "matahari/mainloop.h"
 #include <glib/gi18n.h>
 
 #include <polkit/polkit.h>
@@ -66,8 +71,8 @@ check_authorization(const gchar *action, GError** error,
     authority = polkit_authority_get_sync(NULL, &err);
     if (err != NULL) {
         g_printerr("Error in obtaining authority: %s\n", err->message);
-        g_set_error(error, MATAHARI_ERROR, MATAHARI_AUTHENTICATION_ERROR,
-                    err->message);
+        g_set_error(error, MATAHARI_ERROR, MH_RES_AUTHENTICATION_ERROR,
+                    "%s", err->message);
         g_error_free(err);
         return FALSE;
     }
@@ -78,8 +83,8 @@ check_authorization(const gchar *action, GError** error,
             &err);
     if (err != NULL) {
         g_printerr("Error in checking authorization: %s\n", err->message);
-        g_set_error(error, MATAHARI_ERROR, MATAHARI_AUTHENTICATION_ERROR,
-                    err->message);
+        g_set_error(error, MATAHARI_ERROR, MH_RES_AUTHENTICATION_ERROR,
+                    "%s", err->message);
         g_error_free(err);
         return FALSE;
     }
@@ -88,8 +93,8 @@ check_authorization(const gchar *action, GError** error,
     g_object_unref(result);
     g_object_unref(authority);
     if (!res) {
-        g_set_error(error, MATAHARI_ERROR, MATAHARI_AUTHENTICATION_ERROR,
-                    "You are not authorized for specified action");
+        g_set_error(error, MATAHARI_ERROR, MH_RES_AUTHENTICATION_ERROR,
+                    "%s", mh_result_to_str(MH_RES_AUTHENTICATION_ERROR));
         g_printerr("Caller is not authorized for action %s\n", action);
     }
     return res;
@@ -204,6 +209,7 @@ run_dbus_server(char *bus_name, char *object_path)
         return 1;
     }
 
+    mainloop_track_children(G_PRIORITY_DEFAULT);
     g_main_loop_run(loop);
     g_main_loop_unref(loop);
     g_object_unref(obj);
@@ -229,6 +235,13 @@ matahari_get(Matahari* matahari, const char *interface, const char *name,
     free(action);
 
     spec = g_object_class_find_property(G_OBJECT_GET_CLASS(matahari), name);
+    if (!spec) {
+        error = g_error_new(MATAHARI_ERROR, MH_RES_INVALID_ARGS,
+                            "%s", mh_result_to_str(MH_RES_INVALID_ARGS));
+        dbus_g_method_return_error(context, error);
+        g_error_free(error);
+        return FALSE;
+    }
     g_value_init(&value, spec->value_type);
     g_object_get_property(G_OBJECT(matahari), name, &value);
     dbus_g_method_return(context, &value);
@@ -245,6 +258,7 @@ matahari_set(Matahari *matahari, const char *interface, const char *name,
     if (!check_authorization(action, &error, context)) {
         dbus_g_method_return_error(context, error);
         free(action);
+        g_error_free(error);
         return FALSE;
     }
     free(action);

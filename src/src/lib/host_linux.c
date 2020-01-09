@@ -24,20 +24,30 @@
 #include <limits.h>
 #include <string.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <sys/reboot.h>
 #include <sys/sysinfo.h>
 #include <sys/utsname.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 
 #include <linux/reboot.h>
 #include <linux/kd.h>
 
 #include <pcre.h>
 #include <uuid/uuid.h>
+#include <curl/curl.h>
 
 #include "matahari/logging.h"
 #include "matahari/host.h"
+
+#include "utilities_private.h"
 #include "host_private.h"
+
+
+#define UUID_STR_BUF_LEN 37
+
+#define BUFSIZE 4096
 
 const char *
 host_os_get_cpu_flags(void)
@@ -95,7 +105,21 @@ host_os_get_cpu_flags(void)
                           0, PCRE_NOTEMPTY, found,
                           sizeof(found) / sizeof(found[0]));
 
-        if (match != expected || strncmp(cur + found[2], "flags", 5)) {
+        if (match != expected) {
+            continue;
+        }
+
+        // PowerPC
+        if (strncmp(cur + found[2], "cpu ", 4)) {
+            char *p = strstr(cur + found[4], "altivec supported");
+            if (p && (p - cur) < found[5]) {
+                flags = strdup("altivec");
+                break;
+            }
+        }
+
+        if (strncmp(cur + found[2], "flags", 5) &&
+            strncmp(cur + found[2], "features", 8)) {
             continue;
         }
 
@@ -103,8 +127,7 @@ host_os_get_cpu_flags(void)
         if (!(flags = malloc(len))) {
             goto done;
         }
-        strncpy(flags, cur + found[4], len);
-        flags[len - 1] = '\0';
+        mh_string_copy(flags, cur + found[4], len);
         break;
     }
 
@@ -174,7 +197,8 @@ host_os_identify(void)
     return res;
 }
 
-char *host_os_machine_uuid(void)
+char *
+host_os_machine_uuid(void)
 {
     gchar *output = NULL;
     gchar **lines = NULL;
@@ -207,7 +231,7 @@ char *host_os_machine_uuid(void)
 
     if (!output) {
         mh_err("Got no output from dmidecode when trying to get UUID.\n");
-        return strdup("(dmidecode-failed)");
+        return NULL;
     }
 
     lines = g_strsplit(output, "\n", max_lines);
@@ -238,10 +262,6 @@ char *host_os_machine_uuid(void)
     }
 
 cleanup:
-    if (!uuid) {
-        uuid = strdup("(not-found)");
-    }
-
     if (lines) {
         g_strfreev(lines);
     }
@@ -253,64 +273,389 @@ cleanup:
     return uuid;
 }
 
-char *host_os_custom_uuid(void)
+struct curl_write_cb_data {
+    char buf[256];
+    size_t used;
+};
+
+static size_t
+curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    struct curl_write_cb_data *buf = userdata;
+    size_t len;
+
+    len = size * nmemb;
+
+    if (len >= (sizeof(buf->buf) - buf->used)) {
+        mh_err("Buffer not large enough to hold received UC2 instance ID.");
+        return 0;
+    }
+
+    memcpy(buf->buf + buf->used, ptr, len);
+
+    return len;
+}
+
+char *
+host_os_ec2_instance_id(void)
+{
+    CURL *curl;
+    CURLcode curl_res;
+    long response = 0;
+    static const char URI[] = "http://169.254.169.254/latest/meta-data/instance-id";
+    struct curl_write_cb_data buf = {
+        .used = 0,
+    };
+
+    if (mh_curl_init() != MH_RES_SUCCESS) {
+        return NULL;
+    }
+
+    if (!(curl = curl_easy_init())) {
+        mh_warn("Failed to curl_easy_init()");
+        return NULL;
+    }
+
+    curl_res = curl_easy_setopt(curl, CURLOPT_URL, URI);
+    if (curl_res != CURLE_OK) {
+        mh_warn("curl_easy_setopt of URI '%s' failed. (%d)", URI, curl_res);
+        goto return_cleanup;
+    }
+
+    curl_res = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    if (curl_res != CURLE_OK) {
+        mh_warn("curl_easy_setopt of WRITEFUNCTION failed. (%d)", curl_res);
+        goto return_cleanup;
+    }
+
+    curl_res = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    if (curl_res != CURLE_OK) {
+        mh_warn("curl_easy_setopt of WRITEDATA failed. (%d)", curl_res);
+        goto return_cleanup;
+    }
+
+    curl_res = curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long) 3);
+    if (curl_res != CURLE_OK) {
+        mh_warn("curl_easy_setopt of TIMEOUT failed. (%d)", curl_res);
+        goto return_cleanup;
+    }
+
+    curl_res = curl_easy_perform(curl);
+    if (curl_res != CURLE_OK) {
+        mh_warn("curl request for URI '%s' failed. (%d)", URI, curl_res);
+        goto return_cleanup;
+    }
+
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
+    if (curl_res != CURLE_OK) {
+        mh_warn("curl_easy_getinfo for RESPONSE_CODE failed. (%d)", curl_res);
+        goto return_cleanup;
+    }
+    if (response < 200 || response > 299) {
+        mh_warn("curl request for URI '%s' got response %ld", URI, response);
+    }
+
+return_cleanup:
+    curl_easy_cleanup(curl);
+
+    return mh_strlen_zero(buf.buf) ? NULL : strdup(buf.buf);
+}
+
+char *
+host_os_custom_uuid(void)
 {
     return mh_file_first_line("/etc/custom-machine-id");
 }
 
-char *host_os_reboot_uuid(void)
+char *
+host_os_reboot_uuid(void)
 {
     /* Relies on /var/run being erased at boot-time as is common on most modern distros */
-    const char *file = "/var/run/matahari-reboot-id";
+    static const char file[] = "/var/run/matahari-reboot-id";
+    uuid_t buffer;
+    GError* error = NULL;
     char *uuid = mh_file_first_line(file);
 
-    if(uuid == NULL) {
-        uuid_t buffer;
-        GError* error = NULL;
+    if (uuid) {
+        return uuid;
+    }
 
-        uuid = malloc(38);
-        uuid_generate(buffer);
-        uuid_unparse(buffer, uuid);
+    uuid = malloc(UUID_STR_BUF_LEN);
+    if (!uuid) {
+        return NULL;
+    }
 
-        if(g_file_set_contents(file, uuid, strlen(uuid), &error) == FALSE) {
-            mh_info("%s", error->message);
-            uuid = error->message;
-        }
+    uuid_generate(buffer);
+    uuid_unparse(buffer, uuid);
 
-        if(error) {
-            g_error_free(error);
-        }
+    if (g_file_set_contents(file, uuid, strlen(uuid), &error) == FALSE) {
+        mh_info("%s", error->message);
+        free(uuid);
+        uuid = strdup(error->message);
+    }
+
+    if (error) {
+        g_error_free(error);
     }
 
     return uuid;
 }
 
-const char *host_os_agent_uuid(void)
+char *
+host_os_agent_uuid(void)
 {
+    static char agent_uuid[UUID_STR_BUF_LEN] = "";
     uuid_t buffer;
-    static char *agent_uuid = NULL;
-    uuid_generate(buffer);
 
-    agent_uuid = malloc(38);
+    if (!mh_strlen_zero(agent_uuid)) {
+        return strdup(agent_uuid);
+    }
+
+    uuid_generate(buffer);
     uuid_unparse(buffer, agent_uuid);
 
-    return agent_uuid;
+    return strdup(agent_uuid);
 }
 
-int host_os_set_custom_uuid(const char *uuid)
+int
+host_os_set_custom_uuid(const char *uuid)
 {
     int rc = 0;
-    GError* error = NULL;
+    GError *error = NULL;
 
-    if(g_file_set_contents("/etc/custom-machine-id", uuid, strlen(uuid?uuid:""), &error) == FALSE) {
+    if (!uuid) {
+        uuid = "";
+    }
+
+    if (g_file_set_contents("/etc/custom-machine-id", uuid, strlen(uuid), &error) == FALSE) {
         mh_info("%s", error->message);
         rc = error->code;
     }
 
-    if(error) {
+    if (error) {
         g_error_free(error);
     }
 
     return rc;
 }
 
+static enum mh_result
+exec_command(const char *apath, char *args[], int atimeout, char **stdoutbuf,
+             char **stderrbuf)
+{
+    enum mh_result res = MH_RES_SUCCESS;
+    GPid pid = 0;
+    GError *gerr = NULL;
+    int status = 0;
+    int timeout = atimeout;
+    gint stdout_fd;
+    gint stderr_fd;
+
+    if (!args || !args[0])
+      return MH_RES_OTHER_ERROR;
+
+    mh_trace("Spawning '%s'\n", args[0]);
+    if (!g_spawn_async_with_pipes(apath, args, NULL, G_SPAWN_DO_NOT_REAP_CHILD,
+                                  NULL, NULL, &pid, NULL, &stdout_fd,
+                                  &stderr_fd, &gerr)) {
+        mh_perror(LOG_ERR, "Spawn_process failed with code %d, message: %s\n",
+                  gerr->code, gerr->message);
+        return MH_RES_OTHER_ERROR;
+    }
+
+    mh_trace("Waiting for %d", pid);
+    while (timeout > 0 && waitpid(pid, &status, WNOHANG) <= 0) {
+        sleep(1);
+        timeout--;
+    }
+
+    if (timeout == 0) {
+        int killrc = sigar_proc_kill(pid, SIGKILL);
+
+        res = MH_RES_BACKEND_ERROR;
+        mh_warn("%d - timed out after %dms", pid, atimeout);
+
+        if (killrc != SIGAR_OK && killrc != ESRCH) {
+            mh_err("kill(%d, KILL) failed: %d", pid, killrc);
+        }
+
+    } else if (WIFEXITED(status)) {
+        if (WEXITSTATUS(status) > 0)
+            res = MH_RES_BACKEND_ERROR;
+        mh_err("Managed process %d exited with rc=%d", pid, WEXITSTATUS(status));
+
+    } else if (WIFSIGNALED(status)) {
+        int signo = WTERMSIG(status);
+        res = MH_RES_BACKEND_ERROR;
+        mh_err("Managed process %d exited with signal=%d", pid, signo);
+    }
+
+    mh_trace("Child done: %d", pid);
+
+    if (stdoutbuf) {
+        if (mh_read_from_fd(stdout_fd, stdoutbuf) < 0) {
+            mh_err("Unable to read standard output from command %s.", apath);
+            stdoutbuf = NULL;
+        } else {
+            mh_debug("stdout: %s", *stdoutbuf);
+        }
+    }
+
+    if (stderrbuf) {
+        if (mh_read_from_fd(stderr_fd, stderrbuf) < 0) {
+            mh_err("Unable to read standard error output from command %s.", apath);
+            stderrbuf = NULL;
+        } else {
+            mh_debug("stderr: %s", *stderrbuf);
+        }
+    }
+
+    close(stdout_fd);
+    close(stderr_fd);
+
+    g_spawn_close_pid(pid);
+
+    return res;
+}
+
+GList *
+host_os_list_power_profiles(void)
+{
+    char *stdoutbuf = NULL;
+    char *c1, *c2;
+    char *args[3] = {0};
+    GList *list = NULL;
+    enum mh_result res;
+    size_t len;
+
+    args[0] = TUNEDADM;
+    args[1] = TA_LISTPROFILES;
+    args[2] = NULL;
+
+    res = exec_command(NULL, args, TIMEOUT, &stdoutbuf, NULL);
+
+    if (res == MH_RES_SUCCESS && stdoutbuf) {
+        c1 = stdoutbuf;
+        len = strlen(stdoutbuf);
+        do {
+            // Each line with profile in "tuned-adm list" starts with "-"
+            if (*c1 == '-' && c1 - stdoutbuf + 2 < len) {
+                // Skip the dash and the space after it
+                c1 += 2;
+                // Profile name is the rest of the line
+                c2 = strchr(c1, '\n');
+                if (c2 && c2 > c1) {
+                    // Replace \n with \0 and append it to output
+                    *c2 = '\0';
+                    list = g_list_append(list, strdup(c1));
+                    // Replace it back with \n, so free() will free whole string
+                    *c2 = '\n';
+                }
+            } else {
+                // Line doesn't contain the profile -> skip the line
+                c2 = strchr(c1, '\n');
+            }
+            // Move c1 to beggining of the next line
+            if (c2) {
+                c1 = c2 + 1;
+            }
+        } while (c2 && c1 - stdoutbuf < len);
+
+        if (g_list_length(list) == 0) {
+            // Return at least "off" profile, if no other profile found
+            list = g_list_append(list, strdup(TA_OFF));
+        }
+    }
+    free(stdoutbuf);
+
+    return list;
+}
+
+static gboolean
+check_profile(const char *profile)
+{
+    GList *list = NULL;
+    GList *llist;
+    gboolean rc = FALSE;
+
+    if (!(list = host_os_list_power_profiles()))
+        return FALSE;
+
+    if (!g_list_length(list))
+        return FALSE;
+
+    for (llist = g_list_first(list); llist && !rc; llist = g_list_next(llist)) {
+        mh_trace("comparing '%s' with '%s'", (char *) llist->data, profile);
+        if (!strcmp(profile, (char *) llist->data)) {
+            rc = TRUE;
+            break;
+        }
+    }
+    g_list_free_full(list, free);
+
+    return rc;
+}
+
+enum mh_result
+host_os_set_power_profile(const char *profile)
+{
+    char *args[4] = {0};
+
+    args[0] = TUNEDADM;
+    if (!profile)
+        return MH_RES_INVALID_ARGS;
+
+    if (!strcmp(profile, TA_OFF)) {
+        args[1] = TA_OFF;
+        mh_trace("switching tuning off");
+    } else {
+        if (!check_profile(profile)) {
+            mh_err("invalid profile: %s", profile);
+            return MH_RES_INVALID_ARGS;
+        }
+        args[1] = TA_SETPROFILE;
+        mh_trace("setting profile: %s", profile);
+    }
+
+    args[2] = (char *) profile;
+    args[3] = NULL;
+
+    return exec_command(NULL, args, TIMEOUT, NULL, NULL);
+}
+
+enum mh_result
+host_os_get_power_profile(char **profile)
+{
+    char *stdoutbuf = NULL;
+    char *c1, *c2 = NULL;
+    char *args[3] = {0};
+    enum mh_result res;
+
+    args[0] = TUNEDADM;
+    args[1] = TA_GETPROFILE;
+    args[2] = NULL;
+
+    res = exec_command(NULL, args, TIMEOUT, &stdoutbuf, NULL);
+    if (res == MH_RES_SUCCESS) {
+        // Parse first line of "tuned-adm active", that is something like
+        // "Current active profile: profile_name", so take what is after
+        // semicolon and space to the end of the line
+        if (stdoutbuf && (c1 = strchr(stdoutbuf, ':')) &&
+                (c1 - stdoutbuf + 2 < strlen(stdoutbuf))) {
+            if ((c2 = strchr(c1, '\n'))) {
+                *c2 = '\0';
+            }
+            // + 2 because we need to skip semicolon and space
+            *profile = strdup(c1 + 2);
+            if (c2)
+                *c2 = '\n';
+        } else {
+            *profile = strdup(STR_UNK);
+        }
+    } else {
+        res = MH_RES_BACKEND_ERROR;
+    }
+    free(stdoutbuf);
+
+    return res;
+}

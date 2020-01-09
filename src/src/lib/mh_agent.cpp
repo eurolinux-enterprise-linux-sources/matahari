@@ -16,11 +16,10 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#include "config.h"
+
 #ifdef WIN32
 #include <windows.h>
-int use_stderr = 1;
-#else
-int use_stderr = 0;
 #endif
 
 #include <iostream>
@@ -38,20 +37,25 @@ int use_stderr = 0;
 #include <qpid/sys/Time.h>
 #include <qpid/agent/ManagementAgent.h>
 #include <qpid/client/ConnectionSettings.h>
-// #include <qpid/sys/ssl/util.h>
 #include <qmf/DataAddr.h>
+#include <qmf/Schema.h>
+#include <qmf/SchemaProperty.h>
 #include "matahari/agent.h"
 
-extern "C" {
 #include <sys/types.h>
 #include "matahari/logging.h"
 #include "matahari/dnssrv.h"
 #include "matahari/utilities.h"
+
 #ifndef WIN32
+extern "C" {
 #include <sys/socket.h>
 #include <netdb.h>
+#ifdef MH_SSL
+#include <secmod.h>
 #endif
 }
+#endif
 
 using namespace qpid::management;
 using namespace qpid::client;
@@ -66,6 +70,9 @@ struct MatahariAgentImpl {
 
     qmf::AgentSession _agent_session;
     qpid::messaging::Connection _amqp_connection;
+
+    qmf::Data _agent_instance;
+    void registerAgent(void);
 };
 
 
@@ -158,14 +165,26 @@ map_option(int code, const char *name, const char *arg, void *userdata)
     OptionsMap *options = (OptionsMap*)userdata;
 
     if(strcmp(name, "verbose") == 0) {
-        mh_log_level++;
         mh_enable_stderr(1);
+        if (mh_strlen_zero(arg)) {
+            mh_log_level++;
+        } else {
+            unsigned int val;
 
+            if (sscanf(arg, "%u", &val) == 1) {
+                while (val--) {
+                    mh_log_level++;
+                }
+            } else {
+                mh_warn("Failed to parse verbose value: '%s'", arg);
+            }
+        }
     } else if(strcmp(name, "broker") == 0) {
         (*options)["servername"] = arg;
 
     } else if(strcmp(name, "port") == 0) {
-        (*options)["serverport"] = atoi(arg);
+        uint16_t port = atoi(arg);
+        (*options)["serverport"] = port;
 
     } else if(strcmp(name, "dns-srv") == 0) {
         (*options)["dns-srv"] = 1;
@@ -175,35 +194,6 @@ map_option(int code, const char *name, const char *arg, void *userdata)
     }
     return 0;
 }
-
-#ifdef MH_SSL
-static int
-ssl_option(int code, const char *name, const char *arg, void *userdata)
-{
-    qpid::sys::ssl::SslOptions *options = static_cast<qpid::sys::ssl::SslOptions*>(userdata);
-
-    if(strcmp(name, "ssl-cert-db") == 0) {
-        options->certDbPath = strdup(arg);
-        setenv("QPID_SSL_CERT_DB", arg, 1);
-        if (!g_file_test(arg, G_FILE_TEST_IS_DIR)) {
-            fprintf(stderr, "SSL Certificate database is not accessible. See --help\n");
-            exit(1);
-        }
-
-    } else if(strcmp(name, "ssl-cert-name") == 0) {
-        options->certName = strdup(arg);
-
-    } else if(strcmp(name, "ssl-cert-password-file") == 0) {
-        options->certPasswordFile = strdup(arg);
-        setenv("QPID_SSL_CERT_PASSWORD_FILE", arg, 1);
-        if (!g_file_test(arg, G_FILE_TEST_EXISTS)) {
-            fprintf(stderr, "SSL Password file is not accessible. See --help.\n");
-            exit(1);
-        }
-    }
-    return 0;
-}
-#endif /* MH_SSL */
 
 static int
 connection_option(int code, const char *name, const char *arg, void *userdata)
@@ -218,7 +208,11 @@ connection_option(int code, const char *name, const char *arg, void *userdata)
                                   strcasecmp(arg, "false") != 0);
         (*options)["reconnect"] = reconnect;
     } else {
-        (*options)[name] = arg;
+        if (arg) {
+            (*options)[name] = arg;
+        } else {
+            (*options)[name] = true;
+        }
     }
     return 0;
 }
@@ -226,17 +220,18 @@ connection_option(int code, const char *name, const char *arg, void *userdata)
 int print_help(int code, const char *name, const char *arg, void *userdata)
 {
     int lpc = 0;
-    printf("Usage:\tmatahari-%sd <options>\n", (char *)userdata);
+
+    printf("matahari-%sd <options>\n", (const char *) userdata);
 
     printf("\nOptions:\n");
     printf("\t-h | --help             print this help message.\n");
-    for(lpc = 0; lpc < DIMOF(matahari_options); lpc++) {
-        if(matahari_options[lpc].callback
-            && matahari_options[lpc].callback != connection_option) {
+    for (lpc = 0; lpc < DIMOF(matahari_options); lpc++) {
+        if (matahari_options[lpc].callback) {
             printf("\t-%c | --%-10s\t%s\n", matahari_options[lpc].code,
                    matahari_options[lpc].long_name, matahari_options[lpc].description);
         }
     }
+
     return 0;
 }
 
@@ -247,6 +242,51 @@ mh_connect(OptionsMap mh_options, OptionsMap amqp_options, int retry)
     int backoff = 0;
     GList *srv_records = NULL, *cur_srv_record = NULL;
     struct mh_dnssrv_record *record;
+    GError *error = NULL;
+    int status;
+
+    /* Attempt to initiate k5start for credential renewal's without
+     * prompting for a password each time an agent is run
+     */
+    if (strcmp(amqp_options["sasl-mechanism"].asString().c_str(),"GSSAPI") == 0) {
+        std::string krb5_keytab(mh_options["krb5_keytab"].asString());
+        std::string krb5_interval(mh_options["krb5_interval"].asString());
+        const gchar *k5start_bin[] = {
+            "/usr/bin/k5start",
+            "-U",
+            "-f",
+            krb5_keytab.c_str(),
+            "-K",
+            krb5_interval.c_str(),
+            NULL,
+        };
+
+        mh_trace("kerberos: %s %s %s %s %s %s",
+                 k5start_bin[0],
+                 k5start_bin[1],
+                 k5start_bin[2],
+                 k5start_bin[3],
+                 k5start_bin[4],
+                 k5start_bin[5]);
+
+        if (g_file_test(k5start_bin[0], G_FILE_TEST_IS_EXECUTABLE)) {
+            mh_trace("Running k5start");
+            if (!g_spawn_sync(
+                              NULL,
+                              (gchar **) k5start_bin,
+                              NULL,
+                              G_SPAWN_SEARCH_PATH,
+                              NULL,
+                              NULL,
+                              NULL,
+                              NULL,
+                              &status,
+                              &error)) {
+                mh_warn("k5start failure: %s", error->message);
+                g_error_free(error);
+            }
+        }
+    }
 
     if (!mh_options.count("servername") || mh_options.count("dns-srv")) {
         /*
@@ -257,10 +297,12 @@ mh_connect(OptionsMap mh_options, OptionsMap amqp_options, int retry)
 
         std::stringstream query;
 
+        query << "_matahari.";
+        query << ((mh_options["protocol"]) == "ssl" ? "_tls" : "_tcp") << ".";
         if (mh_options.count("servername")) {
-            query << "_matahari._tcp." << mh_options["servername"];
+            query << mh_options["servername"];
         } else {
-            query << "_matahari._tcp." << mh_dnsdomainname();
+            query << mh_dnsdomainname();
         }
 
         if ((cur_srv_record = srv_records = mh_dnssrv_lookup(query.str().c_str()))) {
@@ -330,14 +372,49 @@ read_environment(OptionsMap& options)
     const char *data;
 
     data = getenv("MATAHARI_BROKER");
-    if (data && strlen(data)) {
+    if (!mh_strlen_zero(data)) {
         options["servername"] = data;
     }
 
     data = getenv("MATAHARI_PORT");
-    if (data && strlen(data)) {
+    if (!mh_strlen_zero(data)) {
         options["serverport"] = data;
     }
+
+    data = getenv("KRB5_KEYTAB");
+    if (!mh_strlen_zero(data)) {
+        options["krb5_keytab"] = data;
+    } else {
+        options["krb5_keytab"] = "/etc/krb5.keytab";
+    }
+
+    data = getenv("KRB5_INTERVAL");
+    if (!mh_strlen_zero(data)) {
+        options["krb5_interval"] = data;
+    } else {
+        options["krb5_interval"] = "10";
+    }
+
+#ifdef MH_SSL
+    data = getenv("QPID_SSL_CERT_DB");
+    if (!mh_strlen_zero(data)) {
+        options["ssl-cert-db"] = data;
+        if (!g_file_test(data, G_FILE_TEST_IS_DIR)) {
+            mh_crit("SSL Certificate database is not accessible. See --help");
+            exit(1);
+        }
+    }
+
+    data = getenv("QPID_SSL_CERT_NAME");
+    if (!mh_strlen_zero(data)) {
+        options["ssl-cert-name"] = data;
+    }
+
+    data = getenv("QPID_SSL_CERT_PASSWORD_FILE");
+    if (!mh_strlen_zero(data)) {
+        options["ssl-cert-password-file"] = data;
+    }
+#endif /* MH_SSL */
 }
 
 static void
@@ -378,7 +455,8 @@ mh_parse_options(const char *proc_name, int argc, char **argv, OptionsMap &optio
     /* Force local-only handling */
     mh_add_option('b', required_argument, "broker",                 "specify broker host name", &options, map_option);
     mh_add_option('D', no_argument,       "dns-srv",                "interpret the value of --broker as a domain name for DNS SRV lookups", &options, map_option);
-    mh_add_option('p', required_argument, "port",                   "specify broker ", &options, map_option);
+    mh_add_option('p', required_argument, "port",                   "specify broker port", &options, map_option);
+    mh_add_option('v', no_argument,       "verbose",                "Increase the log level", NULL, map_option);
 
     mh_add_option('u', required_argument, "username",  "username to use for authentication to the broker", &amqp_options, connection_option);
     mh_add_option('P', required_argument, "password",  "username to use for authentication to the broker", &amqp_options, connection_option);
@@ -386,10 +464,8 @@ mh_parse_options(const char *proc_name, int argc, char **argv, OptionsMap &optio
     mh_add_option('r', required_argument, "reconnect", "attempt to reconnect if the broker connection is lost", &amqp_options, connection_option);
 
 #ifdef MH_SSL
-    qpid::sys::ssl::SslOptions ssl_options;
-    mh_add_option('n', required_argument, "ssl-cert-name",          "name of the certificate to use", &ssl_options, ssl_option);
-    mh_add_option('C', required_argument, "ssl-cert-db",            "file containing the certificate database", &ssl_options, ssl_option);
-    mh_add_option('f', required_argument, "ssl-cert-password-file", "file containing the certificate password", &ssl_options, ssl_option);
+    mh_add_option('n', required_argument, "ssl-cert-name",          "name of the certificate to use", &amqp_options, connection_option);
+    mh_add_option('t', no_argument,       "use-tls",                "Use TLS/SSL encryption", &options, connection_option);
 #endif
 
 #ifdef WIN32
@@ -420,7 +496,6 @@ mh_parse_options(const char *proc_name, int argc, char **argv, OptionsMap &optio
 
     /* Force more local-only processing specific to linux */
     mh_add_option('h', no_argument, "help", NULL, NULL, NULL);
-    mh_add_option('v', no_argument, "verbose", "Increase the log level", NULL, map_option);
 
     opt_string[0] = 0;
     for(lpc = 0; lpc < DIMOF(matahari_options); lpc++) {
@@ -471,13 +546,19 @@ mh_parse_options(const char *proc_name, int argc, char **argv, OptionsMap &optio
 #endif
 
 #ifdef MH_SSL
-    if (ssl_options.certDbPath && ssl_options.certName && ssl_options.certPasswordFile) {
+    if (options.count("use-tls")) {
         options["protocol"] = "ssl";
-        qpid::sys::ssl::initNSS(ssl_options, true);
 
-    } else if (ssl_options.certDbPath || ssl_options.certName || ssl_options.certPasswordFile) {
-        fprintf(stderr, "To enable SSL, you must supply a cert name, db and password file. See --help.\n");
-        exit(1);
+        if (!options.count("ssl-cert-db")) {
+            mh_warn("To enable SSL, you must supply a certificate database");
+        }
+        if (!options.count("ssl-cert-password-file")) {
+            mh_warn("To enable SSL, you must supply a certificate password file");
+        }
+        if (!(amqp_options.count("ssl-cert-name") ||
+              options.count("ssl-cert-name"))) {
+            mh_warn("No SSL certificate name specified");
+        }
     }
 #endif
 
@@ -512,7 +593,16 @@ mh_should_daemonize(int code, const char *name, const char *arg, void *userdata)
         fprintf(stderr, "Error daemonizing: %s\n", strerror(errno));
         exit(1);
     }
+
+    // Don't attempt to log to the console
+    mh_enable_stderr(false);
+
+#ifdef MH_SSL
+    // NSS doesn't like being fork()ed.
+    SECMOD_RestartModules(PR_FALSE);
 #endif
+#endif
+
     return 0;
 }
 
@@ -531,6 +621,44 @@ qmf::AgentSession& MatahariAgent::getSession(void)
     return _impl->_agent_session;
 }
 
+void
+MatahariAgentImpl::registerAgent(void)
+{
+    qmf::Schema data_Agent(qmf::SCHEMA_TYPE_DATA,
+                           "org.matahariproject", "Agent");
+    {
+        qmf::SchemaProperty prop("hostname", qmf::SCHEMA_DATA_STRING);
+        prop.setAccess(qmf::ACCESS_READ_ONLY);
+        prop.setIndex(true);
+        prop.setDesc("Hostname");
+        data_Agent.addProperty(prop);
+    }
+    {
+        qmf::SchemaProperty prop("uuid", qmf::SCHEMA_DATA_STRING);
+        prop.setAccess(qmf::ACCESS_READ_ONLY);
+        prop.setIndex(true);
+        prop.setDesc("Filesystem Host UUID");
+        data_Agent.addProperty(prop);
+    }
+
+    _agent_session.registerSchema(data_Agent);
+
+    _agent_instance = qmf::Data(data_Agent);
+    _agent_instance.setProperty("uuid", mh_uuid());
+    _agent_instance.setProperty("hostname", mh_hostname());
+    _agent_session.addData(_agent_instance);
+}
+
+static bool
+mh_hastty(void)
+{
+#ifdef WIN32
+    return true;
+#else
+    return isatty(STDERR_FILENO);
+#endif
+}
+
 int
 MatahariAgent::init(int argc, char **argv, const char* proc_name)
 {
@@ -540,14 +668,14 @@ MatahariAgent::init(int argc, char **argv, const char* proc_name)
     logname << "matahari-" << proc_name;
 
     /* Set up basic logging */
-    mh_log_init(proc_name, mh_log_level, FALSE);
+    mh_log_init(proc_name, mh_log_level, mh_hastty());
     mh_add_option('d', no_argument, "daemon", "run as a daemon", NULL, mh_should_daemonize);
 
     OptionsMap amqp_options = mh_parse_options(proc_name, argc, argv, options);
 
 
     /* Re-initialize logging now that we've completed option processing */
-    mh_log_init(strdup(logname.str().c_str()), mh_log_level, mh_log_level > LOG_INFO);
+    mh_log_init(strdup(logname.str().c_str()), mh_log_level, mh_hastty());
 
     // Set up the cleanup handler for sigint
     signal(SIGINT, shutdown);
@@ -569,6 +697,8 @@ MatahariAgent::init(int argc, char **argv, const char* proc_name)
         res = -1;
         goto return_cleanup;
     }
+
+    _impl->registerAgent();
 
     _impl->_mainloop = g_main_new(FALSE);
     _impl->_qpid_source = mainloop_add_qmf(G_PRIORITY_HIGH, _impl->_agent_session,

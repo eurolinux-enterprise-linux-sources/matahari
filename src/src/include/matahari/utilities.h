@@ -25,29 +25,42 @@
 #ifndef __MH_UTILITIES__
 #define __MH_UTILITIES__
 
-#include "config.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "matahari/config.h"
 
 #include <stdlib.h>
 #include <sys/types.h>
 #include <string.h>
 #include <glib.h>
 
-extern const char *mh_uuid(void);
-extern const char *mh_hostname(void);
-extern const char *mh_domainname(void);
+const char *
+mh_uuid(void);
+
+const char *
+mh_hostname(void);
+
+const char *
+mh_domainname(void);
 
 /**
  * Get the local dnsdomainname.
  */
-extern const char *
+const char *
 mh_dnsdomainname(void);
 
-extern char *mh_file_first_line(const char *file);
-extern void mh_abort(const char *file, const char *function, int line,
-                     const char *assert_condition, int do_core, int do_fork);
+char *
+mh_file_first_line(const char *file);
+
+void
+mh_abort(const char *file, const char *function, int line,
+         const char *assert_condition, int do_core, int do_fork);
 
 #ifdef WIN32
-extern wchar_t *char2wide(const char *str);
+wchar_t *
+char2wide(const char *str);
 #endif
 
 #ifndef HAVE_ASPRINTF
@@ -58,7 +71,8 @@ extern wchar_t *char2wide(const char *str);
  * asprintf() on the system.  For more information on how to use asprintf(),
  * see its man page.
  */
-extern int asprintf(char **ret, const char *fmt, ...);
+int
+asprintf(char **ret, const char *fmt, ...);
 #endif
 
 #ifndef HAVE_G_LIST_FREE_FULL
@@ -68,7 +82,8 @@ extern int asprintf(char **ret, const char *fmt, ...);
  * This version of g_list_free_full() is only used when the build system
  * doesn't find g_list_free_full() on the system.
  */
-extern void g_list_free_full(GList *list, GDestroyNotify free_func);
+void
+g_list_free_full(GList *list, GDestroyNotify free_func);
 #endif
 
 #define DIMOF(a)    ((int) (sizeof(a) / sizeof(0[a])))
@@ -106,5 +121,32 @@ mh_strlen_zero(const char *s)
 {
     return !s || *s == '\0';
 }
+
+/**
+ * Like strncpy(), but with less suck.
+ *
+ * Use like strncpy().  The differences are that it guarantees to terminate
+ * the output string and that it doesn't wastefully zero out the entire output
+ * buffer after the end of the string.
+ */
+char *
+mh_string_copy(char *dst, const char *src, size_t dst_len);
+
+/**
+ * Read the whole content of file from file descriptor
+ *
+ * \param[in] fd File descriptor to read from. Must be readable.
+ * \param[out] data Data read from the file. Must be freed with free().
+ *
+ * \retval 0 File is empty
+ * \retval >0 Number of characters read
+ * \retval <0 Error occured
+ */
+gssize
+mh_read_from_fd(int fd, char **data);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

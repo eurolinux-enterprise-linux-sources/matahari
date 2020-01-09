@@ -16,9 +16,7 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef WIN32
 #include "config.h"
-#endif
 
 #include "matahari/agent.h"
 
@@ -26,7 +24,6 @@
 
 #include <qpid/agent/ManagementAgent.h>
 
-extern "C" {
 #include <stdlib.h>
 #include <string.h>
 #include <glib.h>
@@ -34,7 +31,7 @@ extern "C" {
 #include "matahari/logging.h"
 #include "matahari/network.h"
 #include "matahari/host.h"
-};
+#include "matahari/errors.h"
 
 class NetAgent : public MatahariAgent
 {
@@ -152,7 +149,7 @@ NetAgent::invoke(qmf::AgentSession session, qmf::AgentEvent event,
                 args["iface"].asString().c_str(),
                 buf, sizeof(buf)));
     } else {
-        session.raiseException(event, MH_NOT_IMPLEMENTED);
+        session.raiseException(event, mh_result_to_str(MH_RES_NOT_IMPLEMENTED));
         goto bail;
     }
 

@@ -18,7 +18,6 @@
 
 #include "config.h"
 
-#define _GNU_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -30,6 +29,7 @@
 
 #include "matahari/logging.h"
 #include "matahari/utilities.h"
+#include "matahari/errors.h"
 #include "utilities_private.h"
 
 MH_TRACE_INIT_DATA(mh_core);
@@ -384,7 +384,11 @@ mh_dnsdomainname(void)
 const char *
 mh_uuid(void)
 {
-    return mh_os_uuid();
+    const char *uuid;
+
+    uuid = mh_os_uuid();
+
+    return uuid ? uuid : "";
 }
 
 const char *
@@ -498,3 +502,69 @@ g_list_free_full (GList *list, GDestroyNotify free_func)
     g_list_free (list);
 }
 #endif /* HAVE_G_LIST_FREE_FULL */
+
+char *
+mh_string_copy(char *dst, const char *src, size_t dst_len)
+{
+    char *ret = dst;
+    size_t orig_dst_len = dst_len;
+
+    while (*src && dst_len) {
+        *dst++ = *src++;
+        dst_len--;
+    }
+
+    if (orig_dst_len) {
+        if (!dst_len) {
+            dst--;
+        }
+        *dst = '\0';
+    }
+
+    return ret;
+}
+
+const char *
+mh_result_to_str(enum mh_result res)
+{
+    switch (res) {
+    case MH_RES_SUCCESS:
+        return "Success";
+    case MH_RES_NOT_IMPLEMENTED:
+        return "Not implemented";
+    case MH_RES_INVALID_ARGS:
+        return "Invalid Arguments";
+    case MH_RES_DOWNLOAD_ERROR:
+        return "Unable to download file";
+    case MH_RES_BACKEND_ERROR:
+        return "Error in backend";
+    case MH_RES_AUTHENTICATION_ERROR:
+        return "You are not authorized for specified action";
+    case MH_RES_OTHER_ERROR:
+        return "General error";
+    }
+    return "FIXME: result code doesn't have message assigned!";
+}
+
+gssize
+mh_read_from_fd(int fd, char **data)
+{
+    gsize length;
+    GError *err = NULL;
+    GIOChannel *ch;
+
+#ifdef WIN32
+    ch = g_io_channel_win32_new_fd(fd);
+#else
+    ch = g_io_channel_unix_new(fd);
+#endif
+
+    if (g_io_channel_read_to_end(ch, data, &length, &err) != G_IO_STATUS_NORMAL) {
+        mh_err("Unable to read from filedescriptor %d: %s", fd, err->message);
+        return -err->code;
+    }
+    g_io_channel_close(ch);
+    g_io_channel_unref(ch);
+    return length;
+}
+

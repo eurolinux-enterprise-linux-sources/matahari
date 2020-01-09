@@ -3,10 +3,10 @@ cmake_minimum_required(VERSION 2.6)
 project (MATAHARI)
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
-set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR "4")
-set(CPACK_PACKAGE_VERSION_PATCH "4")
-set(PROJECT_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+file(STRINGS ".version" PROJECT_VERSION)
+string(REGEX REPLACE "^([^.]+)[.]([^.]+)[.]([^.]+)$" "\\1" CPACK_PACKAGE_VERSION_MAJOR "${PROJECT_VERSION}")
+string(REGEX REPLACE "^([^.]+)[.]([^.]+)[.]([^.]+)$" "\\2" CPACK_PACKAGE_VERSION_MINOR "${PROJECT_VERSION}")
+string(REGEX REPLACE "^([^.]+)[.]([^.]+)[.]([^.]+)$" "\\3" CPACK_PACKAGE_VERSION_PATCH "${PROJECT_VERSION}")
 
 MACRO (inherit_value theSymbol theValue)
     if (NOT DEFINED ${theSymbol})
@@ -41,12 +41,6 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Matahari QMF Agent")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "matahari-${CPACK_PACKAGE_VERSION}")
 
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/matahari.sysconf.in
-	       ${CMAKE_CURRENT_BINARY_DIR}/matahari.sysconf)
-
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/matahari-broker.conf.in
-	       ${CMAKE_CURRENT_BINARY_DIR}/matahari-broker.conf)
-
 if(WIN32)
 
   set (CPACK_GENERATOR "NSIS")
@@ -55,7 +49,7 @@ if(WIN32)
   set (CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/windows/matahari-icon.ico")
   set (CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}/src/windows/matahari-icon.ico")
   set (CPACK_PACKAGE_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/windows/matahari-install-banner.bmp")
-  set (CPACK_NSIS_URL_INFO_ABOUT "http://fedorahosted.org/matahari")
+  set (CPACK_NSIS_URL_INFO_ABOUT "http://matahariproject.org")
 
   # Needs this to correctly set up Start menu links later.
   set (CPACK_PACKAGE_EXECUTABLES "")
@@ -78,71 +72,33 @@ if(WIN32)
   set( CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "\\n")
   set( CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS ${CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS} 
   					   " Some comment\\n  DetailPrint \\\"Stopping Matahari services\\\"\\n"
-					   " Some comment\\n  ExecWait '\\\"$SYSDIR\\\\sc.exe stop mh_hostd\\\"'\\n"
-					   " Some comment\\n  ExecWait '\\\"$SYSDIR\\\\sc.exe stop mh_netd\\\"'\\n"
-					   " Some comment\\n  ExecWait '\\\"$SYSDIR\\\\sc.exe stop mh_serviced\\\"'\\n"
-					   " Give them time to stop\\n  Sleep 10000\\n"
-  					   " Some comment\\n  DetailPrint \\\"Removing Matahari services\\\"\\n"
-					   " Some comment\\n  ExecWait '\\\"$SYSDIR\\\\sc.exe delete mh_hostd\\\"'\\n"
-					   " Some comment\\n  ExecWait '\\\"$SYSDIR\\\\sc.exe delete mh_netd\\\"'\\n"
-					   " Some comment\\n  ExecWait '\\\"$SYSDIR\\\\sc.exe delete mh_serviced\\\"'\\n"
-  					   " Some comment\\n  DetailPrint \\\"Removing Matahari service binaries\\\"\\n"
-					   " Some comment\\n  ExecWait 'del \\\"$INSTDIR\\\\mh_hostd.exe\\\"'\\n"
-					   " Some comment\\n  ExecWait 'del \\\"$INSTDIR\\\\mh_netd.exe\\\"'\\n"
-					   " Some comment\\n  ExecWait 'del \\\"$INSTDIR\\\\mh_serviced.exe\\\"'\\n"
+					   " Some comment\\n  ExecWait \\\"$INSTDIR\\\\sbin\\\\uninstall.bat\\\"\\n"
 					   )
 
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/windows/autorun.inf.in 
                  ${CMAKE_CURRENT_BINARY_DIR}/src/windows/autorun.inf)
   
-  # Assume all installed DLLs are needed by matahari/qpid
-  # Finding the minimal list is excruciatingly painful and unreliable
+  # Assume all installed DLLs are needed by matahari/qpid.
+  # Determining a detailed list here is unnecessary.  Package builds are done
+  # in a dedicate chroot, so the only DLLs present will be the ones that were
+  # installed as dependencies.
   file(GLOB_RECURSE DLL_LIST ${MINGW_ROOT}/*/*.dll)
   install(FILES ${DLL_LIST} DESTINATION sbin)
+
+  file(GLOB_RECURSE GSPAWN_HELPERS ${MINGW_ROOT}/*/gspawn-win32-helper*.exe)
+  install(FILES ${GSPAWN_HELPERS} DESTINATION sbin)
 
   # Util for creating services
   file(GLOB_RECURSE SRVANY_EXE ${MINGW_ROOT}/*/srvany.exe)
   install(FILES ${SRVANY_EXE} DESTINATION sbin)
   install(FILES src/windows/install.bat DESTINATION sbin)
+  install(FILES src/windows/uninstall.bat DESTINATION sbin)
 
 else(WIN32)
 
   set (CPACK_GENERATOR "TGZ")
 
-  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/matahari.init.in
-		 ${CMAKE_CURRENT_BINARY_DIR}/matahari.init)
-
-  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/matahari-broker.init.in
-		 ${CMAKE_CURRENT_BINARY_DIR}/matahari-broker @ONLY)
-
-  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/matahari-broker.sysconf.in
-		 ${CMAKE_CURRENT_BINARY_DIR}/matahari-broker.sysconf @ONLY)
-
-  install(DIRECTORY DESTINATION ${localstatedir}/lib/matahari
-          DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
-                                GROUP_READ GROUP_WRITE GROUP_EXECUTE)
-  install(CODE "execute_process(COMMAND chown root:qpidd ${localstatedir}/lib/matahari)")
-
-  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/matahari-broker DESTINATION ${initdir})
-
-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/matahari.sysconf DESTINATION ${sysconfdir}/sysconfig RENAME matahari)
-
-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/matahari-broker.sysconf DESTINATION ${sysconfdir}/sysconfig RENAME matahari-broker)
-
-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/matahari-broker.conf DESTINATION ${sysconfdir})
-
-  # Check for systemd
-  include(FindPkgConfig)
-  pkg_check_modules(systemd systemd)
-
-  if(systemd_FOUND)
-    set(systemdunitdir "/lib/systemd/system")
-
-    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/matahari-broker.service.in
-                   ${CMAKE_CURRENT_BINARY_DIR}/matahari-broker.service)
-
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/matahari-broker.service DESTINATION ${systemdunitdir})
-  endif(systemd_FOUND)
+  add_subdirectory(sys)
 
 endif(WIN32)
 

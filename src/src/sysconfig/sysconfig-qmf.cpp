@@ -21,19 +21,15 @@
  * \brief Sysconfig QMF Agent
  */
 
-#ifndef WIN32
 #include "config.h"
-#endif
 
 #include <qpid/agent/ManagementAgent.h>
 #include "qmf/org/matahariproject/QmfPackage.h"
 #include "matahari/agent.h"
 
-extern "C" {
 #include "matahari/logging.h"
 #include "matahari/host.h"
 #include "matahari/sysconfig.h"
-};
 
 class ConfigAgent : public MatahariAgent
 {
@@ -50,12 +46,31 @@ public:
 
 const char ConfigAgent::SYSCONFIG_NAME[] = "Sysconfig";
 
+class AsyncCB
+{
+public:
+    AsyncCB(const std::string& _key, qmf::AgentEvent& _event,
+            qmf::AgentSession& _session) :
+                    key(_key), event(_event), session(_session) {}
+    ~AsyncCB() {}
+
+    static void result_cb(void *cb_data, int res);
+
+private:
+    std::string key;
+    /** The method call that initiated this async action */
+    qmf::AgentEvent event;
+    /** The QMF session that initiated this async action */
+    qmf::AgentSession session;
+};
+
 int
 main(int argc, char **argv)
 {
     ConfigAgent agent;
     int rc = agent.init(argc, argv, "Sysconfig");
     if (rc == 0) {
+        mainloop_track_children(G_PRIORITY_DEFAULT);
         agent.run();
     }
     return rc;
@@ -75,10 +90,26 @@ ConfigAgent::setup(qmf::AgentSession session)
     return 0;
 }
 
+void
+AsyncCB::result_cb(void *cb_data, int res)
+{
+    AsyncCB *action_data = static_cast<AsyncCB *>(cb_data);
+    char *status;
+
+    status = mh_sysconfig_is_configured(action_data->key.c_str());
+    action_data->event.addReturnArgument("status", status ? status : "unknown");
+
+    action_data->session.methodSuccess(action_data->event);
+
+    free(status);
+    delete action_data;
+}
+
 gboolean
 ConfigAgent::invoke(qmf::AgentSession session, qmf::AgentEvent event, gpointer user_data)
 {
     char *status = NULL;
+    bool async = false;
 
     const std::string& methodName(event.getMethodName());
     if (event.getType() != qmf::AGENT_METHOD) {
@@ -87,36 +118,49 @@ ConfigAgent::invoke(qmf::AgentSession session, qmf::AgentEvent event, gpointer u
 
     qpid::types::Variant::Map& args = event.getArguments();
 
-    if (methodName == "run_uri") {
-        mh_sysconfig_run_uri(args["uri"].asString().c_str(),
-            args["flags"].asUint32(),
-            args["scheme"].asString().c_str(),
-            args["key"].asString().c_str());
-        status = mh_sysconfig_is_configured(args["key"].asString().c_str());
-        event.addReturnArgument("status", status ? status : "unknown");
-    } else if (methodName == "run_string") {
-        mh_sysconfig_run_string(args["text"].asString().c_str(),
-            args["flags"].asUint32(),
-            args["scheme"].asString().c_str(),
-            args["key"].asString().c_str());
-        status = mh_sysconfig_is_configured(args["key"].asString().c_str());
-        event.addReturnArgument("status", status ? status : "unknown");
+    if (methodName == "run_uri" || methodName == "run_string") {
+        AsyncCB *action_data = new AsyncCB(args["key"].asString(), event, session);
+        mh_result res;
+
+        if (methodName == "run_uri")
+            res = mh_sysconfig_run_uri(args["uri"].asString().c_str(),
+                args["flags"].asUint32(),
+                args["scheme"].asString().c_str(),
+                args["key"].asString().c_str(), AsyncCB::result_cb, action_data);
+        else
+            res = mh_sysconfig_run_string(args["text"].asString().c_str(),
+                args["flags"].asUint32(),
+                args["scheme"].asString().c_str(),
+                args["key"].asString().c_str(), AsyncCB::result_cb, action_data);
+
+
+        if (res == MH_RES_SUCCESS) {
+            async = true;
+        } else {
+            session.raiseException(event, mh_result_to_str(res));
+            delete action_data;
+            goto bail;
+        }
     } else if (methodName == "query") {
-        const char *data = NULL;
-        data = mh_sysconfig_query(args["query"].asString().c_str(),
+        char *data = NULL;
+        data = mh_sysconfig_query(args["text"].asString().c_str(),
                                   args["flags"].asUint32(),
                                   args["scheme"].asString().c_str());
         event.addReturnArgument("data", data ? data : "unknown");
+        free(data);
     } else if (methodName == "is_configured") {
         status = mh_sysconfig_is_configured(args["key"].asString().c_str());
         event.addReturnArgument("status", status ? status : "unknown");
     } else {
-        session.raiseException(event, MH_NOT_IMPLEMENTED);
+        session.raiseException(event, mh_result_to_str(MH_RES_NOT_IMPLEMENTED));
         goto bail;
     }
 
     free(status);
-    session.methodSuccess(event);
+
+    if (!async) {
+        session.methodSuccess(event);
+    }
 
 bail:
     return TRUE;

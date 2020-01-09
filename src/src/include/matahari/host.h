@@ -25,9 +25,16 @@
 #ifndef __MH_HOST_H__
 #define __MH_HOST_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <sigar.h>
+#include <glib.h>
+
+#include "matahari/errors.h"
 
 /**
  * Get a UUID for a host.
@@ -43,7 +50,7 @@
  *
  * \return the UUID
  */
-extern const char *
+const char *
 mh_host_get_uuid(const char *lifetime);
 
 /**
@@ -56,24 +63,44 @@ mh_host_get_uuid(const char *lifetime);
  * \retval 0 success
  * \retval non-zero failure
  */
-extern int
+int
 mh_host_set_uuid(const char *lifetime, const char *uuid);
 
-extern const char *mh_host_get_hostname(void);
-extern const char *mh_host_get_operating_system(void);
+const char *
+mh_host_get_hostname(void);
 
-extern const char *mh_host_get_architecture(void);
-extern const char *mh_host_get_cpu_model(void);
-extern const char *mh_host_get_cpu_flags(void);
+const char *
+mh_host_get_operating_system(void);
 
-extern uint64_t mh_host_get_memory(void);
-extern uint64_t mh_host_get_mem_free(void);
-extern uint64_t mh_host_get_swap(void);
-extern uint64_t mh_host_get_swap_free(void);
+const char *
+mh_host_get_architecture(void);
 
-extern int mh_host_get_cpu_count(void);
-extern int mh_host_get_cpu_number_of_cores(void);
-extern int mh_host_get_cpu_wordsize(void);
+const char *
+mh_host_get_cpu_model(void);
+
+const char *
+mh_host_get_cpu_flags(void);
+
+uint64_t
+mh_host_get_memory(void);
+
+uint64_t
+mh_host_get_mem_free(void);
+
+uint64_t
+mh_host_get_swap(void);
+
+uint64_t
+mh_host_get_swap_free(void);
+
+int
+mh_host_get_cpu_count(void);
+
+int
+mh_host_get_cpu_number_of_cores(void);
+
+int
+mh_host_get_cpu_wordsize(void);
 
 /**
  * Identify a host.
@@ -83,11 +110,55 @@ extern int mh_host_get_cpu_wordsize(void);
  * \retval 0 success
  * \retval non-zero failure
  */
-extern int mh_host_identify(void);
+int
+mh_host_identify(void);
 
-extern void mh_host_reboot(void);
-extern void mh_host_shutdown(void);
-extern void mh_host_get_load_averages(sigar_loadavg_t *avg);
-extern void mh_host_get_processes(sigar_proc_stat_t *procs);
+void
+mh_host_reboot(void);
+
+void
+mh_host_shutdown(void);
+
+void
+mh_host_get_load_averages(sigar_loadavg_t *avg);
+
+void
+mh_host_get_processes(sigar_proc_stat_t *procs);
+
+/**
+ * Set power management profile.
+ *
+ * \param[in] profile One of profile returned by mh_host_list_power_profiles
+ *                    function
+ * \return see enum mh_result
+ */
+enum mh_result
+mh_host_set_power_profile(const char *profile);
+
+/**
+ * Get current power management profile.
+ *
+ * \param[out] profile Variable where current profile will be written to.
+ *                     Variable must be freed with free().
+ *
+ * \return see enum mh_result
+ */
+enum mh_result
+mh_host_get_power_profile(char **profile);
+
+/**
+ * Get list of all available power management profiles.
+ *
+ * \note The return of this routine must be freed with
+ *       g_list_free_full(returned_list, free);
+ *
+ * \return list of all profiles.
+ */
+GList *
+mh_host_list_power_profiles(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // __MH_HOST_H__

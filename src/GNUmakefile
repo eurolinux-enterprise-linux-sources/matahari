@@ -19,11 +19,12 @@
 -include Makefile
 
 PACKAGE		?= matahari
-VERSION		?= 0.4.4
-TARPREFIX	= $(PACKAGE)-$(PACKAGE)-$(TAG)
-TARFILE		= $(TARPREFIX).tgz
+VERSION		?= $(shell cat .version)
+TARPREFIX	?= $(PACKAGE)-$(PACKAGE)-$(TAG)
+TARFILE		?= $(TARPREFIX).tgz
 HTML_ROOT	= coverity@www.clusterlabs.org:/var/www/html
 
+RPM             := $(shell which rpm)
 RPM_ROOT	?= $(shell pwd)
 RPM_OPTS	= --define "_sourcedir $(RPM_ROOT)" 	\
 		  --define "_specdir   $(RPM_ROOT)" 	\
@@ -43,13 +44,20 @@ DOT:=$(shell which dot 2>/dev/null)
 linux.build:
 	@echo "=::=::=::= Setting up for Linux =::=::=::= "
 	mkdir -p $@
-	cd $@ && eval "`rpm --eval "%{cmake}" | grep -v -e "^%"`" -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+ifeq ($(RPM),)
+	cd $@ && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DREQUIRE_HELP2MAN=$(REQUIRE_HELP2MAN) -DSYSCONF_INSTALL_DIR=/etc ..
+else
+	cd $@ && eval "`rpm --eval "%{cmake}" | grep -v -e "^%"`" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DREQUIRE_HELP2MAN=$(REQUIRE_HELP2MAN) ..
+endif
 	@$(MAKE) --no-print-dir -C $@
 
 tests: linux.build
-	@if [ -f linux.build/src/tests/CTestTestfile.cmake ]; then \
-		cd linux.build/src/tests && ctest -V; \
+	@if [ -f linux.build/src/unittests/CTestTestfile.cmake ]; then \
+		cd linux.build/src/unittests && ctest -V; \
 	fi
+
+install: linux.build
+	$(MAKE) --no-print-dir -C $< install
 
 windows.build:
 	@echo "=::=::=::= Setting up for Windows =::=::=::= "
@@ -75,15 +83,17 @@ check-mock:
 	make mock mock-win
 
 export:
-	rm -f $(TARFILE).tgz
-	git archive --prefix=$(TARPREFIX)/ $(TAG) | gzip > $(TARFILE)
+	rm -f $(TARFILE)
+	git archive --prefix=$(TARPREFIX)/ $(TAG) | tar x
+	cd $(TARPREFIX) && \
+		$(MAKE) linux.build REQUIRE_HELP2MAN=1 && \
+		for n in `find linux.build/ -iname '*.8.gz'` ; do cp $$n $${n:12}; done && \
+		rm -rf linux.build && cd ..
+	tar czvf $(TARFILE) $(TARPREFIX)
 	echo `date`: Rebuilt $(TARFILE) from $(TAG)
 
 $(VARIANT)$(PACKAGE).spec: $(VARIANT)$(PACKAGE).spec.in
 	cp $(VARIANT)$(PACKAGE).spec.in $(VARIANT)$(PACKAGE).spec
-
-srpm:	export $(VARIANT)$(PACKAGE).spec
-	rm -f *.src.rpm
 	if [ -e $(BUILD_COUNTER) ]; then									\
 		echo $(COUNT) > $(BUILD_COUNTER);								\
 		sed -i.sed 's/global\ specversion.*/global\ specversion\ $(COUNT)/' $(VARIANT)$(PACKAGE).spec;  \
@@ -92,6 +102,10 @@ srpm:	export $(VARIANT)$(PACKAGE).spec
 		sed -i.sed 's/global\ specversion.*/global\ specversion\ 1/' $(VARIANT)$(PACKAGE).spec; 	\
 	fi
 	sed -i.sed 's/global\ upstream_version.*/global\ upstream_version\ $(TAG)/' $(VARIANT)$(PACKAGE).spec
+	sed -i.sed 's/#MATAHARI_VERSION#/$(VERSION)/' $(VARIANT)$(PACKAGE).spec
+
+srpm:	export $(VARIANT)$(PACKAGE).spec
+	rm -f *.src.rpm
 	rpmbuild -bs $(RPM_OPTS) $(VARIANT)$(PACKAGE).spec
 
 # eg. WITH="--with cman" make rpm
@@ -99,8 +113,7 @@ rpm:	srpm
 	@echo To create custom builds, edit the flags and options in $(PACKAGE)-$(DISTRO).spec first
 	rpmbuild $(RPM_OPTS) $(WITH) --rebuild $(RPM_ROOT)/*.src.rpm
 
-overlay: export
-	sed -i.sed 's/global\ upstream_version.*/global\ upstream_version\ $(TAG)/' $(VARIANT)$(PACKAGE).spec
+overlay: export $(VARIANT)$(PACKAGE).spec
 	cp $(TARFILE) ~/rpmbuild/SOURCES
 	cp $(VARIANT)$(PACKAGE).spec ~/rpmbuild/SPECS
 	make -C ~/rpmbuild/SOURCES $(VARIANT)$(PACKAGE)
@@ -110,7 +123,7 @@ overlay-win:
 
 mock-nodeps:
 	-rm -rf $(RPM_ROOT)/mock
-	mock $(WITH) --root=$(PROFILE) --resultdir=$(RPM_ROOT)/mock --rebuild $(RPM_ROOT)/*.src.rpm
+	mock -v $(WITH) --root=$(PROFILE) --resultdir=$(RPM_ROOT)/mock --rebuild $(RPM_ROOT)/*.src.rpm
 
 mock:   srpm mock-nodeps
 
@@ -137,7 +150,7 @@ coverity:
 #	rm -rf $(COVERITY_DIR) $(COVERITY_DIR).build
 
 clean:
-	rm -f *.tgz *.sed *.gres *~
+	rm -f *.tgz *.sed *.gres *~ *.spec
 	@if [ -d linux.build ] ; then \
 		$(MAKE) --no-print-dir -C linux.build clean ; \
 	elif [ -d windows.build ] ; then \
@@ -177,4 +190,4 @@ endif
 	@sed -i -e 's/###MATAHARI_VERSION###/$(VERSION)/' doc/Doxyfile
 	@doxygen doc/Doxyfile
 
-.PHONY: check linux.build windows.build clean doxygen tags www-doxygen coverity
+.PHONY: check linux.build windows.build install clean doxygen tags www-doxygen coverity $(VARIANT)$(PACKAGE).spec

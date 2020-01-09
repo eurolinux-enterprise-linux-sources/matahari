@@ -16,14 +16,10 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef WIN32
 #include "config.h"
-#endif
 
-extern "C" {
 #include <stdlib.h>
 #include <string.h>
-};
 
 #include <string>
 #include <qpid/management/Manageable.h>
@@ -32,10 +28,9 @@ extern "C" {
 
 #include "qmf/org/matahariproject/QmfPackage.h"
 
-extern "C" {
 #include "matahari/logging.h"
 #include "matahari/services.h"
-}
+#include "matahari/errors.h"
 
 #include <iostream>
 
@@ -55,8 +50,6 @@ private:
 
     qmf::Data _resources;
     static const char RESOURCES_NAME[];
-
-    _qtype::Variant::List standards;
 
     gboolean invoke_services(qmf::AgentSession session,
                              qmf::AgentEvent event, gpointer user_data);
@@ -220,14 +213,6 @@ SrvAgent::raiseEvent(svc_action_t *op, enum service_id service, const std::strin
 int
 SrvAgent::setup(qmf::AgentSession session)
 {
-#ifdef __linux__
-    standards.push_back("ocf");
-#endif
-    standards.push_back("lsb");
-#ifndef WIN32
-    standards.push_back("windows");
-#endif
-
     _package.configure(session);
 
     _services = qmf::Data(_package.data_Services);
@@ -306,7 +291,7 @@ SrvAgent::invoke_services(qmf::AgentSession session, qmf::AgentEvent event,
             default_timeout_ms);
 
         if (!op) {
-            session.raiseException(event, MH_INVALID_ARGS);
+            session.raiseException(event, mh_result_to_str(MH_RES_INVALID_ARGS));
         } else {
             action_async(SRV_SERVICES, session, event, op, true);
         }
@@ -320,7 +305,7 @@ SrvAgent::invoke_services(qmf::AgentSession session, qmf::AgentEvent event,
                 args["name"].asString().c_str(), methodName.c_str(), 0, args["timeout"].asInt32());
 
         if (!op) {
-            session.raiseException(event, MH_INVALID_ARGS);
+            session.raiseException(event, mh_result_to_str(MH_RES_INVALID_ARGS));
         } else {
             action_async(SRV_SERVICES, session, event, op, true);
         }
@@ -328,7 +313,7 @@ SrvAgent::invoke_services(qmf::AgentSession session, qmf::AgentEvent event,
         return TRUE;
 
     } else {
-        session.raiseException(event, MH_NOT_IMPLEMENTED);
+        session.raiseException(event, mh_result_to_str(MH_RES_NOT_IMPLEMENTED));
         return TRUE;
     }
 
@@ -348,7 +333,17 @@ SrvAgent::invoke_resources(qmf::AgentSession session, qmf::AgentEvent event,
     qpid::types::Variant::Map& args = event.getArguments();
 
     if (methodName == "list_standards") {
-        event.addReturnArgument("standards", standards);
+        GList *gIter = NULL;
+        GList *standards = NULL;
+        _qtype::Variant::List s_list;
+
+        standards = resources_list_standards();
+        for (gIter = standards; gIter != NULL; gIter = gIter->next) {
+            s_list.push_back((const char *) gIter->data);
+        }
+        g_list_free_full(standards, free);
+
+        event.addReturnArgument("standards", s_list);
 
     } else if (methodName == "list_providers") {
         GList *gIter = NULL;
@@ -388,7 +383,6 @@ SrvAgent::invoke_resources(qmf::AgentSession session, qmf::AgentEvent event,
 
     } else if (methodName == "invoke") {
         svc_action_t *op = NULL;
-        bool valid_standard = false;
         _qtype::Variant::List::iterator iter;
         _qtype::Variant::Map map;
 
@@ -403,19 +397,6 @@ SrvAgent::invoke_resources(qmf::AgentSession session, qmf::AgentEvent event,
         std::string agent;
         std::string standard("ocf");
         std::string provider("heartbeat");
-
-        for ( iter=standards.begin() ; iter != standards.end(); iter++ ) {
-            if(args["standard"].asString() == (*iter).asString()) {
-                valid_standard = true;
-                break;
-            }
-        }
-
-        if(valid_standard == false) {
-            mh_err("%s is not a known resource standard", args["standard"].asString().c_str());
-            session.raiseException(event, MH_NOT_IMPLEMENTED);
-            return TRUE;
-        }
 
         if (args.count("standard")) {
             standard = args["standard"].asString();
@@ -436,6 +417,14 @@ SrvAgent::invoke_resources(qmf::AgentSession session, qmf::AgentEvent event,
             timeout = args["timeout"].asInt32();
         }
 
+        GList *standards = resources_list_standards();
+
+        if (g_list_find_custom(standards, standard.c_str(), (GCompareFunc) strcasecmp) == NULL) {
+            mh_err("%s is not a known resource standard", standard.c_str());
+            session.raiseException(event, mh_result_to_str(MH_RES_NOT_IMPLEMENTED));
+            return TRUE;
+        }
+
         op = resources_action_create(
             args["name"].asString().c_str(),
             standard.c_str(), provider.c_str(), agent.c_str(),
@@ -443,7 +432,7 @@ SrvAgent::invoke_resources(qmf::AgentSession session, qmf::AgentEvent event,
             interval, timeout, params);
 
         if (!op) {
-            session.raiseException(event, MH_INVALID_ARGS);
+            session.raiseException(event, mh_result_to_str(MH_RES_INVALID_ARGS));
             return TRUE;
         }
 
@@ -461,7 +450,7 @@ SrvAgent::invoke_resources(qmf::AgentSession session, qmf::AgentEvent event,
                 args["interval"].asInt32());
 
     } else {
-        session.raiseException(event, MH_NOT_IMPLEMENTED);
+        session.raiseException(event, mh_result_to_str(MH_RES_NOT_IMPLEMENTED));
         return TRUE;
     }
 
