@@ -1,3 +1,0 @@
-Within the contrib/puppet directory run:
-
-# sudo RUBYLIB=lib/ puppet --modulepath=modules/ --verbose manifests/site.pp

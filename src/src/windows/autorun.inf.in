@@ -1,5 +1,0 @@
-; Autorun.inf - http://en.wikipedia.org/wiki/Autorun.inf
-[autorun] 
-open=matahari.exe 
-icon=matahari.exe,0
-label=Matahari-${PROJECT_VERSION} Installation CD
