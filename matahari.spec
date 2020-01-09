@@ -1,4 +1,4 @@
-%global specversion 11
+%global specversion 12
 %global upstream_version 0.4.4
 
 %define _default_patch_fuzz 2
@@ -36,6 +36,7 @@ Patch13:	bz735426-2-fix-warning.diff
 Patch14:	bz737088-2-dont-use-help2man.diff
 Patch15:        bz746288-1-cpu-features.diff
 Patch16:        bz751790-1-disable-by-default.diff
+Patch17:        remove-qpid-linking.diff
 
 BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
@@ -214,6 +215,7 @@ QMF console for monitoring various agents
 %patch14 -p1
 %patch15 -p1
 %patch16 -p1
+%patch17 -p1
 
 %build
 %{cmake} -DCMAKE_BUILD_TYPE=RelWithDebInfo %{!?with_qmf: -DWITH-QMF:BOOL=OFF} %{!?with_dbus: -DWITH-DBUS:BOOL=OFF} -Dinitdir=%{_initddir} -Dsysconfdir=%{_sysconfdir} .
@@ -555,6 +557,11 @@ test "x%{buildroot}" != "x" && rm -rf %{buildroot}
 %endif
 
 %changelog
+* Thu Mar 29 2012 Jeff Peeler <jpeeler@redhat.com> 0.4.4-12
+- Do not link to the Qpid client library.
+- Remove unused includes to avoid linking to qpid::sys symbols
+  Resolves: rhbz#806766
+
 * Mon Nov 07 2011 Matthew Garrett <mjg@redhat.com> 0.4.4-11
 - Disable by default (rhbz#751790)751790
 
